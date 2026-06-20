@@ -3,14 +3,19 @@ package main
 import (
 	"context"
 	"embed"
+	_ "embed"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed zoopicon.png
+var appIcon []byte
 
 func main() {
 	nodeService := NewNodeService()
@@ -27,6 +32,9 @@ func main() {
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 8, G: 12, B: 16, A: 255}, // Match --bg: hsl(220, 16%, 8%)
+		Linux: &linux.Options{
+			Icon: appIcon,
+		},
 		OnStartup: func(ctx context.Context) {
 			nodeService.Startup(ctx)
 			trayManager.SetupTray(ctx, nodeService)

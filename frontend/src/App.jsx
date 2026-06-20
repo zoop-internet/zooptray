@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import zoopLogo from './assets/images/zoopicon.png';
-import { LayoutDashboard, Users, Settings as SettingsIcon, Terminal as LogsIcon } from 'lucide-react';
+import { LayoutDashboard, Users, Settings as SettingsIcon, Terminal as LogsIcon, Sun, Moon } from 'lucide-react';
 import * as runtime from "../wailsjs/runtime/runtime";
 import { 
   GetConfig, 
@@ -18,6 +18,7 @@ import LogsView from './components/LogsView';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('dashboard');
+  const [theme, setTheme] = useState('light');
   const [config, setConfig] = useState(null);
   const [interfaces, setInterfaces] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -29,6 +30,11 @@ export default function App() {
     totalDataShared: 0,
     sharingEnabled: false
   });
+
+  // Apply theme class/attribute dynamically
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   // Load initial settings and backend data on mount
   useEffect(() => {
@@ -187,6 +193,13 @@ export default function App() {
             <h1>{screenDetails[currentScreen].title}</h1>
             <p>{screenDetails[currentScreen].subtitle}</p>
           </div>
+          <button 
+            onClick={() => setTheme(prev => prev === 'light' ? 'dark' : 'light')} 
+            className="theme-toggle-btn"
+            title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+          >
+            {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
         </header>
 
         <section className="content">
