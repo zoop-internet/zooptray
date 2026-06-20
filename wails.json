@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "zoop-one",
+  "outputfilename": "zoop-one",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Zoop Network",
+    "email": "contact@zoopnetwork.com"
+  },
+  "info": {
+    "companyName": "Zoop Network",
+    "productName": "Zoop One",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2024 Zoop Network. All rights reserved.",
+    "comments": "Zoop One — Cross-Platform Desktop Node Daemon"
+  }
+}
