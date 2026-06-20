@@ -87,3 +87,7 @@ func (t *ActiveTrayManager) onReady() {
 func (t *ActiveTrayManager) onExit() {
 	// Cleanup operations if required on exit
 }
+
+func (t *ActiveTrayManager) IsActive() bool {
+	return true
+}

@@ -22,3 +22,7 @@ func (t *StubTrayManager) SetupTray(ctx context.Context, nodeService *NodeServic
 func (t *StubTrayManager) Quit() {
 	// Stub implementation: No-op
 }
+
+func (t *StubTrayManager) IsActive() bool {
+	return false
+}

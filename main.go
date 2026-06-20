@@ -9,6 +9,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/linux"
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
@@ -38,6 +39,13 @@ func main() {
 		OnStartup: func(ctx context.Context) {
 			nodeService.Startup(ctx)
 			trayManager.SetupTray(ctx, nodeService)
+		},
+		OnBeforeClose: func(ctx context.Context) bool {
+			if trayManager.IsActive() {
+				wailsRuntime.WindowHide(ctx)
+				return true // Cancel normal window close, hide to tray instead
+			}
+			return false // Close and exit if tray is inactive
 		},
 		OnShutdown: func(ctx context.Context) {
 			nodeService.Shutdown(ctx)
