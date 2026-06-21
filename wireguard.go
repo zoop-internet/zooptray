@@ -84,10 +84,57 @@ PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING 
 	return os.WriteFile(configPath, []byte(content), 0600)
 }
 
+// InstallWGDependenciesIfNeeded checks for wireguard-tools and installs them using PolicyKit (pkexec) if missing
+func InstallWGDependenciesIfNeeded() error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+
+	_, err := exec.LookPath("wg-quick")
+	if err == nil {
+		// Already installed, ensure IP forwarding is active (non-blocking)
+		_ = exec.Command("sudo", "sysctl", "-w", "net.ipv4.ip_forward=1").Run()
+		return nil
+	}
+
+	// wg-quick is missing, attempt auto-install using pkexec with the detected package manager
+	if _, err := os.Stat("/usr/bin/apt-get"); err == nil {
+		// Debian / Ubuntu / Mint
+		cmd := exec.Command("pkexec", "sh", "-c", "apt-get update && apt-get install -y wireguard wireguard-tools iptables && sysctl -w net.ipv4.ip_forward=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to auto-install dependencies: %s (%v)", string(output), err)
+		}
+	} else if _, err := os.Stat("/usr/bin/dnf"); err == nil {
+		// Fedora / RHEL
+		cmd := exec.Command("pkexec", "sh", "-c", "dnf install -y wireguard-tools iptables && sysctl -w net.ipv4.ip_forward=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to auto-install dependencies: %s (%v)", string(output), err)
+		}
+	} else if _, err := os.Stat("/usr/bin/pacman"); err == nil {
+		// Arch Linux
+		cmd := exec.Command("pkexec", "sh", "-c", "pacman -S --noconfirm wireguard-tools iptables && sysctl -w net.ipv4.ip_forward=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to auto-install dependencies: %s (%v)", string(output), err)
+		}
+	} else {
+		return fmt.Errorf("wg-quick utility not found. Please install wireguard-tools manually for your Linux distribution")
+	}
+
+	return nil
+}
+
 // StartWGTunnel calls wg-quick to start the WireGuard interface
 func StartWGTunnel() error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("wireguard tunnel is only supported on Linux in this release")
+	}
+
+	// Automatically check and install dependencies if missing
+	if err := InstallWGDependenciesIfNeeded(); err != nil {
+		return err
 	}
 
 	configPath, err := GetWGConfigPath()
