@@ -1,5 +1,9 @@
-import React, { useMemo } from 'react';
-import { Check, Pause, Play, ArrowUp, CheckCircle, AlertCircle } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  Check, Pause, Play, ArrowUp, CheckCircle, AlertCircle, Copy,
+  Shield, Key, Globe, Loader, AlertTriangle, ChevronDown, ChevronUp, Server
+} from 'lucide-react';
+import { toast } from './Toast';
 
 export default function Dashboard({ 
   telemetry, 
@@ -7,9 +11,36 @@ export default function Dashboard({
   onToggleSharing, 
   bandwidthHistory, 
   dataHistory,
-  uptimeString 
+  uptimeString,
+  wgInfo,
+  wgLoading,
 }) {
   const isOnline = telemetry.sharingEnabled;
+  const [copiedId, setCopiedId]     = useState(false);
+  const [copiedField, setCopiedField] = useState(null);
+  const [wgExpanded, setWgExpanded]  = useState(true);
+
+  const handleCopyNodeId = () => {
+    const id = config?.node?.id || 'node-alpha-7';
+    navigator.clipboard.writeText(id);
+    setCopiedId(true);
+    toast.info(`Node ID copied: ${id}`);
+    setTimeout(() => setCopiedId(false), 2000);
+  };
+
+  const handleCopyField = (key, value) => {
+    navigator.clipboard.writeText(value);
+    setCopiedField(key);
+    toast.success(`${key} copied!`);
+    setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleToggle = () => {
+    const next = !isOnline;
+    onToggleSharing(next);
+    if (next) toast.success('Node started — setting up WireGuard tunnel…');
+    else toast.warning('Node paused — sharing stopped');
+  };
 
   // Render a responsive SVG sparkline path
   const makeSparklinePath = (history, width, height) => {
@@ -17,25 +48,132 @@ export default function Dashboard({
     const minVal = Math.min(...history);
     const maxVal = Math.max(...history);
     const range = maxVal - minVal || 1;
-    
-    // Add small pad to top and bottom of chart
     const points = history.map((val, idx) => {
       const x = (idx / (history.length - 1)) * width;
       const y = height - ((val - minVal) / range) * (height - 8) - 4;
       return `${x},${y}`;
     });
-    
     return `M ${points.join(" L ")}`;
   };
 
   const bandwidthPath = useMemo(() => makeSparklinePath(bandwidthHistory, 220, 50), [bandwidthHistory]);
-  const dataPath = useMemo(() => makeSparklinePath(dataHistory, 220, 50), [dataHistory]);
+  const dataPath      = useMemo(() => makeSparklinePath(dataHistory, 220, 50), [dataHistory]);
 
   const currentTotalSpeed = isOnline ? (telemetry.downloadSpeed + telemetry.uploadSpeed) : 0;
 
+  // ── WireGuard Config fields to display ─────────────────────────────────────
+  const wgFields = wgInfo ? [
+    { key: 'Public Key',   value: wgInfo.publicKey,            icon: <Key size={14} />,    mono: true  },
+    { key: 'Private Key',  value: wgInfo.privateKey,           icon: <Shield size={14} />, mono: true, sensitive: true },
+    { key: 'Listen Port',  value: String(wgInfo.listenPort),   icon: <Globe size={14} />,  mono: false },
+    { key: 'Address',      value: wgInfo.address,              icon: <Server size={14} />, mono: false },
+    { key: 'Interface',    value: wgInfo.wgInterface,          icon: <Globe size={14} />,  mono: false },
+    { key: 'Config Path',  value: wgInfo.configPath,           icon: <Key size={14} />,    mono: true  },
+  ] : [];
+
+  // Client-side peer block template
+  const peerBlock = wgInfo
+    ? `[Interface]\nPrivateKey = <CLIENT_PRIVATE_KEY>\nAddress = 10.200.0.2/32\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = ${wgInfo.publicKey}\nEndpoint = <YOUR_PUBLIC_IP>:${wgInfo.listenPort}\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25`
+    : '';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* Node Status Card */}
+
+      {/* ── WireGuard Loading Overlay ────────────────────────────────────────── */}
+      {wgLoading && (
+        <div className="wg-loading-banner">
+          <div className="wg-loading-spinner">
+            <Loader size={22} className="wg-spin" />
+          </div>
+          <div>
+            <div className="wg-loading-title">Setting up WireGuard tunnel…</div>
+            <div className="wg-loading-sub">Generating keys, writing config, bringing up interface.</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── WireGuard Config Card ────────────────────────────────────────────── */}
+      {wgInfo && !wgLoading && (
+        <div className={`wg-config-card ${wgInfo.active ? 'active' : 'error'}`}>
+          {/* Header */}
+          <div className="wg-config-header" onClick={() => setWgExpanded(v => !v)}>
+            <div className="wg-config-header-left">
+              <div className={`wg-status-dot ${wgInfo.active ? 'on' : 'off'}`} />
+              <span className="wg-config-title">
+                WireGuard Tunnel
+              </span>
+              {wgInfo.active
+                ? <span className="wg-badge active">Active</span>
+                : <span className="wg-badge error"><AlertTriangle size={11} /> Setup needed</span>
+              }
+            </div>
+            <button className="wg-expand-btn" type="button">
+              {wgExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
+          </div>
+
+          {wgInfo.error && (
+            <div className="wg-error-notice">
+              <AlertTriangle size={13} />
+              <span>{wgInfo.error}</span>
+            </div>
+          )}
+
+          {wgExpanded && (
+            <div className="wg-config-body">
+              {/* Server fields */}
+              <div className="wg-section-label">Server Configuration</div>
+              <div className="wg-fields">
+                {wgFields.map(f => (
+                  <div className="wg-field-row" key={f.key}>
+                    <div className="wg-field-icon">{f.icon}</div>
+                    <div className="wg-field-label">{f.key}</div>
+                    <div className={`wg-field-value ${f.mono ? 'mono' : ''}`}>
+                      {f.sensitive
+                        ? <span className="wg-sensitive">••••••••••••••••••••••••••••••••••••••••••</span>
+                        : <span>{f.value}</span>
+                      }
+                    </div>
+                    <button
+                      type="button"
+                      className="wg-copy-btn"
+                      title={`Copy ${f.key}`}
+                      onClick={() => handleCopyField(f.key, f.value)}
+                    >
+                      {copiedField === f.key
+                        ? <Check size={13} color="var(--green)" />
+                        : <Copy size={13} />
+                      }
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Client peer block */}
+              <div className="wg-section-label" style={{ marginTop: '16px' }}>
+                Client Peer Block
+                <span className="wg-section-hint">— paste this into each connecting device's wg config</span>
+              </div>
+              <div className="wg-peer-block">
+                <pre>{peerBlock}</pre>
+                <button
+                  type="button"
+                  className="wg-copy-btn wg-copy-block"
+                  title="Copy peer block"
+                  onClick={() => handleCopyField('Peer Block', peerBlock)}
+                >
+                  {copiedField === 'Peer Block'
+                    ? <><Check size={13} color="var(--green)" /> Copied!</>
+                    : <><Copy size={13} /> Copy all</>
+                  }
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Node Status Card ──────────────────────────────────────────────────── */}
       <div className="node-status-card">
         <div className="node-status-left">
           <div className="status-ring-container">
@@ -43,31 +181,41 @@ export default function Dashboard({
               <circle className="status-ring-bg" cx="50" cy="50" r="40" />
               <circle 
                 className={`status-ring-active ${isOnline ? '' : 'offline'}`}
-                cx="50" 
-                cy="50" 
-                r="40" 
+                cx="50" cy="50" r="40" 
                 strokeDashoffset={isOnline ? 0 : 251.2}
               />
             </svg>
             <div className={`status-ring-center ${isOnline ? '' : 'offline'}`}>
-              {isOnline ? <Check size={20} strokeWidth={3} /> : <Pause size={18} strokeWidth={3} />}
+              {wgLoading
+                ? <Loader size={18} className="wg-spin" />
+                : isOnline ? <Check size={20} strokeWidth={3} /> : <Pause size={18} strokeWidth={3} />
+              }
             </div>
           </div>
 
           <div className="node-status-info">
             <div className="node-status-msg">
-              <h2>{isOnline ? 'Your node is connected' : 'Your node is disconnected'}</h2>
+              <h2>
+                {wgLoading
+                  ? 'Bringing up WireGuard…'
+                  : isOnline ? 'Your node is connected' : 'Your node is disconnected'
+                }
+              </h2>
               <p>
-                {isOnline 
-                  ? 'Your device is actively sharing network resources with the decentralized network.' 
-                  : 'Hotspot disabled. everyday providers are offline.'}
+                {wgLoading
+                  ? 'Configuring keys and network interface. This takes a few seconds.'
+                  : isOnline 
+                    ? 'Your device is actively sharing network resources with the decentralized network.' 
+                    : 'Hotspot disabled. everyday providers are offline.'
+                }
               </p>
             </div>
             <button 
               type="button" 
               className="btn btn-primary"
-              onClick={() => onToggleSharing(!isOnline)}
-              style={{ alignSelf: 'flex-start', minWidth: '130px' }}
+              onClick={handleToggle}
+              disabled={wgLoading}
+              style={{ alignSelf: 'flex-start', minWidth: '140px', opacity: wgLoading ? 0.6 : 1 }}
             >
               {isOnline ? (
                 <>
@@ -77,7 +225,7 @@ export default function Dashboard({
               ) : (
                 <>
                   <Play size={14} />
-                  <span>Start Sharing</span>
+                  <span>{wgLoading ? 'Starting…' : 'Start Sharing'}</span>
                 </>
               )}
             </button>
@@ -87,7 +235,12 @@ export default function Dashboard({
         <div className="node-status-right">
           <div className="meta-row">
             <span className="meta-label">Node ID</span>
-            <span className="meta-value">{config ? config.node.id : 'loading...'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="meta-value">{config ? config.node.id : '…'}</span>
+              <button type="button" className="copy-btn" onClick={handleCopyNodeId} title="Copy Node ID">
+                {copiedId ? <Check size={14} color="var(--green)" /> : <Copy size={14} />}
+              </button>
+            </div>
           </div>
           <div className="meta-row">
             <span className="meta-label">Uptime</span>
@@ -104,7 +257,7 @@ export default function Dashboard({
         </div>
       </div>
 
-      {/* Telemetry Widgets Grid */}
+      {/* ── Telemetry Widgets Grid ────────────────────────────────────────────── */}
       <div className="telemetry-grid">
         {/* Bandwidth Shared Card */}
         <div className="telemetry-card bandwidth">
@@ -119,10 +272,7 @@ export default function Dashboard({
           <div className="sparkline-container">
             {isOnline && bandwidthHistory.length > 1 ? (
               <svg className="sparkline-svg" width="220" height="50">
-                <path 
-                  className="sparkline-path bandwidth" 
-                  d={bandwidthPath} 
-                />
+                <path className="sparkline-path bandwidth" d={bandwidthPath} />
               </svg>
             ) : (
               <div style={{ fontSize: '11px', color: 'var(--muted-dark)', paddingBottom: '6px' }}>
@@ -150,10 +300,7 @@ export default function Dashboard({
           <div className="sparkline-container">
             {isOnline && dataHistory.length > 1 ? (
               <svg className="sparkline-svg" width="220" height="50">
-                <path 
-                  className="sparkline-path data" 
-                  d={dataPath} 
-                />
+                <path className="sparkline-path data" d={dataPath} />
               </svg>
             ) : (
               <div style={{ fontSize: '11px', color: 'var(--muted-dark)', paddingBottom: '6px' }}>
@@ -174,18 +321,24 @@ export default function Dashboard({
             <span className="telemetry-label">Status</span>
             <div className="telemetry-value-wrap" style={{ marginTop: '4px' }}>
               <span className="telemetry-value" style={{ fontSize: '22px', fontFamily: 'var(--font)', fontWeight: '700' }}>
-                {isOnline ? 'Healthy' : 'Offline'}
+                {wgLoading ? 'Initializing' : isOnline ? 'Healthy' : 'Offline'}
               </span>
             </div>
           </div>
           
           <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '8px' }}>
-            {isOnline ? 'All systems operational' : 'Sharing is currently disabled by policy'}
+            {wgLoading
+              ? 'WireGuard tunnel starting up…'
+              : isOnline ? 'All systems operational' : 'Sharing is currently disabled by policy'
+            }
           </div>
 
           <div className="status-badge-container">
             <div className={`status-badge-circle ${isOnline ? '' : 'offline'}`}>
-              {isOnline ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+              {wgLoading
+                ? <Loader size={18} className="wg-spin" />
+                : isOnline ? <CheckCircle size={18} /> : <AlertCircle size={18} />
+              }
             </div>
           </div>
         </div>

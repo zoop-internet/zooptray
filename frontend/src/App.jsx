@@ -1,167 +1,158 @@
 import React, { useState, useEffect } from 'react';
 import zoopLogo from './assets/images/zoopicon.png';
 import { 
-  LayoutDashboard, 
-  Wifi, 
-  Wallet, 
-  Settings as SettingsIcon, 
-  Info,
-  Sun, 
-  Moon
+  LayoutDashboard, Wifi, Monitor, Wallet, Settings as SettingsIcon, Info, Sun, Moon
 } from 'lucide-react';
 import * as runtime from "../wailsjs/runtime/runtime";
-import { 
-  GetConfig, 
-  SaveConfig, 
-  ToggleSharing, 
-  GetInterfaces, 
-  DisconnectClient, 
-  GetLogs 
-} from "../wailsjs/go/main/NodeService";
+import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs } from "../wailsjs/go/main/NodeService";
 
-import Dashboard from './components/Dashboard';
-import Sharing from './components/Sharing';
-import Earnings from './components/Earnings';
-import Settings from './components/Settings';
-import About from './components/About';
+import Dashboard  from './components/Dashboard';
+import Sharing    from './components/Sharing';
+import Devices    from './components/Devices';
+import Earnings   from './components/Earnings';
+import Settings   from './components/Settings';
+import About      from './components/About';
+import ToastContainer from './components/Toast';
 
 export default function App() {
+  // Persist theme via localStorage so it survives app restarts
+  const [theme, setTheme] = useState(() => localStorage.getItem('zoop-theme') || 'dark');
   const [currentScreen, setCurrentScreen] = useState('dashboard');
-  const [theme, setTheme] = useState('dark'); // Dark mode by default for premium feel
-  const [config, setConfig] = useState(null);
+  const [config, setConfig]       = useState(null);
   const [interfaces, setInterfaces] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [clients, setClients] = useState([]);
+  const [logs, setLogs]           = useState([]);
+  const [clients, setClients]     = useState([]);
   const [telemetry, setTelemetry] = useState({
-    uploadSpeed: 0,
-    downloadSpeed: 0,
-    activeClientsCount: 0,
-    totalDataShared: 0,
-    sharingEnabled: false
+    uploadSpeed: 0, downloadSpeed: 0,
+    activeClientsCount: 0, totalDataShared: 0, sharingEnabled: false
   });
 
-  // Maintain rolling telemetry histories for sparklines
-  const [bandwidthHistory, setBandwidthHistory] = useState(Array(15).fill(0));
-  const [dataHistory, setDataHistory] = useState(Array(15).fill(0));
+  const [bandwidthHistory, setBandwidthHistory] = useState(Array(20).fill(0));
+  const [dataHistory, setDataHistory]           = useState(Array(20).fill(0));
 
-  // Dynamic uptime tracker (simulates long running node starting from 2d 14h 32m)
-  const [startTime] = useState(Date.now() - (2 * 24 * 3600 * 1000 + 14 * 3600 * 1000 + 32 * 60 * 1000));
-  const [uptimeString, setUptimeString] = useState("2d 14h 32m");
+  // WireGuard tunnel state
+  const [wgInfo, setWgInfo]       = useState(null);
+  const [wgLoading, setWgLoading] = useState(false);
 
+  const [startTime] = useState(Date.now() - (2 * 24 * 3600e3 + 14 * 3600e3 + 32 * 60e3));
+  const [uptimeString, setUptimeString] = useState('2d 14h 32m');
+
+  // Uptime ticker
   useEffect(() => {
     const interval = setInterval(() => {
       const diff = Date.now() - startTime;
-      const days = Math.floor(diff / (24 * 3600 * 1000));
-      const hours = Math.floor((diff % (24 * 3600 * 1000)) / (3600 * 1000));
-      const minutes = Math.floor((diff % (3600 * 1000)) / (60 * 1000));
-      setUptimeString(`${days}d ${hours}h ${minutes}m`);
+      const d = Math.floor(diff / (24 * 3600e3));
+      const h = Math.floor((diff % (24 * 3600e3)) / 3600e3);
+      const m = Math.floor((diff % 3600e3) / 60e3);
+      setUptimeString(`${d}d ${h}h ${m}m`);
     }, 5000);
     return () => clearInterval(interval);
   }, [startTime]);
 
-  // Apply theme class/attribute dynamically
+  // Apply and persist theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('zoop-theme', theme);
   }, [theme]);
 
-  // Load initial settings and backend data on mount
+  // Load initial data
   useEffect(() => {
-    GetConfig().then((cfg) => {
+    GetConfig().then(cfg => {
       setConfig(cfg);
-      setTelemetry(prev => ({
-        ...prev,
-        sharingEnabled: cfg.sharing.enabled
-      }));
-    }).catch(err => console.error("Failed to load config:", err));
+      setTelemetry(prev => ({ ...prev, sharingEnabled: cfg.sharing.enabled }));
+    }).catch(console.error);
 
-    GetInterfaces().then((ifaces) => {
-      setInterfaces(ifaces);
-    }).catch(err => console.error("Failed to load interfaces:", err));
-
-    GetLogs().then((initialLogs) => {
-      setLogs(initialLogs || []);
-    }).catch(err => console.error("Failed to load logs:", err));
+    GetInterfaces().then(setInterfaces).catch(console.error);
+    GetLogs().then(l => setLogs(l || [])).catch(console.error);
   }, []);
 
-  // Set up real-time Wails event listeners
+  // Real-time Wails events
   useEffect(() => {
-    // Telemetry update
-    runtime.EventsOn("telemetry_updated", (data) => {
+    runtime.EventsOn('telemetry_updated', (data) => {
       setTelemetry(data);
-      
-      // Push speeds to history
       const totalSpeed = data.uploadSpeed + data.downloadSpeed;
       setBandwidthHistory(prev => [...prev.slice(1), totalSpeed]);
       setDataHistory(prev => [...prev.slice(1), data.totalDataShared]);
     });
-
-    // Connected clients update
-    runtime.EventsOn("clients_updated", (data) => {
-      setClients(data || []);
+    runtime.EventsOn('clients_updated', (data) => setClients(data || []));
+    runtime.EventsOn('log_added', (newLog) => {
+      setLogs(prev => [...prev, newLog].slice(-100));
     });
 
-    // Log added event
-    runtime.EventsOn("log_added", (newLog) => {
-      setLogs((prev) => {
-        const updated = [...prev, newLog];
-        return updated.slice(-100); // cap size at 100
-      });
+    // WireGuard tunnel lifecycle events
+    runtime.EventsOn('wg_tunnel_ready', (info) => {
+      setWgLoading(false);
+      setWgInfo(info);
+    });
+    runtime.EventsOn('wg_tunnel_error', (info) => {
+      setWgLoading(false);
+      setWgInfo(info);
+    });
+    runtime.EventsOn('wg_tunnel_stopped', () => {
+      setWgLoading(false);
+      setWgInfo(null);
     });
 
     return () => {
-      runtime.EventsOff("telemetry_updated");
-      runtime.EventsOff("clients_updated");
-      runtime.EventsOff("log_added");
+      runtime.EventsOff('telemetry_updated');
+      runtime.EventsOff('clients_updated');
+      runtime.EventsOff('log_added');
+      runtime.EventsOff('wg_tunnel_ready');
+      runtime.EventsOff('wg_tunnel_error');
+      runtime.EventsOff('wg_tunnel_stopped');
     };
   }, []);
 
-  // Window management is handled by the OS native title bar on all platforms
-
-  // Interaction handlers
   const handleToggleSharing = (nextState) => {
-    ToggleSharing(nextState).then((result) => {
-      setTelemetry(prev => ({
-        ...prev,
-        sharingEnabled: result
-      }));
+    if (nextState) {
+      // Show loading overlay while WireGuard sets up
+      setWgLoading(true);
+      setWgInfo(null);
+    } else {
+      setWgInfo(null);
+      setWgLoading(false);
+    }
+    ToggleSharing(nextState).then(result => {
+      setTelemetry(prev => ({ ...prev, sharingEnabled: result }));
     });
   };
 
   const handleDisconnectClient = (mac) => {
-    DisconnectClient(mac).then((success) => {
-      if (success) {
-        setClients(prev => prev.filter(c => c.mac !== mac));
-      }
+    DisconnectClient(mac).then(success => {
+      if (success) setClients(prev => prev.filter(c => c.mac !== mac));
     });
   };
 
   const handleSaveConfig = (updatedConfig) => {
     return SaveConfig(updatedConfig).then(() => {
       setConfig(updatedConfig);
-      setTelemetry(prev => ({
-        ...prev,
-        sharingEnabled: updatedConfig.sharing.enabled
-      }));
+      setTelemetry(prev => ({ ...prev, sharingEnabled: updatedConfig.sharing.enabled }));
     });
   };
 
-  // Screen descriptions matching mockup
   const screenDetails = {
-    dashboard: { title: 'Dashboard', subtitle: 'Overview of your node' },
-    sharing: { title: 'Sharing', subtitle: 'Control your sharing preferences' },
-    earnings: { title: 'Earnings', subtitle: 'Track your earnings and payments' },
-    settings: { title: 'Settings', subtitle: 'Configure connection profiles and node properties' },
-    about: { title: 'About', subtitle: 'Desktop daemon properties and diagnostic stream' }
+    dashboard: { title: 'Dashboard',  subtitle: 'Live overview of your node' },
+    sharing:   { title: 'Sharing',    subtitle: 'Control your sharing preferences' },
+    devices:   { title: 'Devices',    subtitle: 'Manage connected guest devices' },
+    earnings:  { title: 'Earnings',   subtitle: 'Track your earnings and rewards' },
+    settings:  { title: 'Settings',   subtitle: 'Configure your node and network' },
+    about:     { title: 'About',      subtitle: 'Node properties and diagnostic logs' },
   };
 
-  // Browser dashboard external link
-  const handleOpenBrowserDashboard = () => {
-    runtime.BrowserOpenURL("https://console.zoopnetwork.com");
-  };
+  const navItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+    { id: 'sharing',   label: 'Sharing',   icon: <Wifi size={18} /> },
+    { id: 'devices',   label: 'Devices',   icon: <Monitor size={18} />, badge: clients.length > 0 ? String(clients.length) : null },
+    { id: 'earnings',  label: 'Earnings',  icon: <Wallet size={18} />, badgeLabel: 'Soon' },
+    { id: 'settings',  label: 'Settings',  icon: <SettingsIcon size={18} /> },
+    { id: 'about',     label: 'About',     icon: <Info size={18} /> },
+  ];
 
   return (
     <div className="shell">
-      {/* Sidebar navigation */}
+      <ToastContainer />
+
+      {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="sidebar-brand">
@@ -170,60 +161,28 @@ export default function App() {
           </div>
 
           <nav className="sidebar-nav">
-            <div 
-              className={`nav-item ${currentScreen === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setCurrentScreen('dashboard')}
-            >
-              <div className="nav-item-left">
-                <LayoutDashboard />
-                <span>Dashboard</span>
+            {navItems.map(item => (
+              <div
+                key={item.id}
+                className={`nav-item ${currentScreen === item.id ? 'active' : ''}`}
+                onClick={() => setCurrentScreen(item.id)}
+              >
+                <div className="nav-item-left">
+                  {item.icon}
+                  <span>{item.label}</span>
+                </div>
+                {item.badgeLabel && (
+                  <span className="nav-badge">{item.badgeLabel}</span>
+                )}
+                {item.badge && (
+                  <span className="nav-badge-count">{item.badge}</span>
+                )}
               </div>
-            </div>
-
-            <div 
-              className={`nav-item ${currentScreen === 'sharing' ? 'active' : ''}`}
-              onClick={() => setCurrentScreen('sharing')}
-            >
-              <div className="nav-item-left">
-                <Wifi />
-                <span>Sharing</span>
-              </div>
-            </div>
-
-            <div 
-              className={`nav-item ${currentScreen === 'earnings' ? 'active' : ''}`}
-              onClick={() => setCurrentScreen('earnings')}
-            >
-              <div className="nav-item-left">
-                <Wallet />
-                <span>Earnings</span>
-              </div>
-              <span className="nav-badge">Soon</span>
-            </div>
-
-            <div 
-              className={`nav-item ${currentScreen === 'settings' ? 'active' : ''}`}
-              onClick={() => setCurrentScreen('settings')}
-            >
-              <div className="nav-item-left">
-                <SettingsIcon />
-                <span>Settings</span>
-              </div>
-            </div>
-
-            <div 
-              className={`nav-item ${currentScreen === 'about' ? 'active' : ''}`}
-              onClick={() => setCurrentScreen('about')}
-            >
-              <div className="nav-item-left">
-                <Info />
-                <span>About</span>
-              </div>
-            </div>
+            ))}
           </nav>
         </div>
 
-        {/* Sidebar Footer Status Indicator */}
+        {/* Status Footer */}
         <div className="sidebar-status-card">
           <div className="sidebar-status-header">
             <div className={`status-dot ${telemetry.sharingEnabled ? 'green' : 'red'}`}></div>
@@ -232,86 +191,66 @@ export default function App() {
             </span>
           </div>
           <div className="sidebar-status-version">v1.0.0</div>
-          <span 
-            className="sidebar-status-link"
-            onClick={() => alert("Your software is up to date.")}
-          >
+          <span className="sidebar-status-link" onClick={() => alert('Your software is up to date.')}>
             Check for updates
           </span>
         </div>
       </aside>
 
-      {/* Main panel layout */}
+      {/* Main */}
       <main className="main">
         <header className="topbar">
           <div className="topbar-title">
             <h1>{screenDetails[currentScreen].title}</h1>
             <p>{screenDetails[currentScreen].subtitle}</p>
           </div>
-          
           <div className="topbar-right">
-            {/* Conditional header actions */}
             {currentScreen === 'dashboard' && (
-              <button 
-                type="button" 
-                className="btn" 
-                onClick={handleOpenBrowserDashboard}
+              <button type="button" className="btn"
+                onClick={() => runtime.BrowserOpenURL('https://console.zoopnetwork.com')}
               >
-                <span>Open Dashboard in Browser</span>
+                Open in Browser
               </button>
             )}
-
-            <button 
-              onClick={() => setTheme(prev => prev === 'light' ? 'dark' : 'light')} 
+            <button
               className="win-btn"
-              title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+              onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')}
+              title="Toggle theme"
             >
               {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
             </button>
           </div>
         </header>
 
-        {/* Content routing rendering */}
         <section className="content">
           {currentScreen === 'dashboard' && (
-            <Dashboard 
-              telemetry={telemetry} 
-              config={config}
-              onToggleSharing={handleToggleSharing} 
-              bandwidthHistory={bandwidthHistory}
-              dataHistory={dataHistory}
-              uptimeString={uptimeString}
-            />
-          )}
-
-          {currentScreen === 'sharing' && (
-            <Sharing 
-              telemetry={telemetry} 
-              clients={clients}
-              config={config}
+            <Dashboard telemetry={telemetry} config={config}
               onToggleSharing={handleToggleSharing}
-              onDisconnectClient={handleDisconnectClient}
+              bandwidthHistory={bandwidthHistory} dataHistory={dataHistory}
+              uptimeString={uptimeString}
+              wgInfo={wgInfo}
+              wgLoading={wgLoading}
+            />
+          )}
+          {currentScreen === 'sharing' && (
+            <Sharing telemetry={telemetry} config={config}
+              onToggleSharing={handleToggleSharing}
               uptimeString={uptimeString}
             />
           )}
-
-          {currentScreen === 'earnings' && (
-            <Earnings />
+          {currentScreen === 'devices' && (
+            <Devices
+              clients={clients}
+              telemetry={telemetry}
+              onDisconnectClient={handleDisconnectClient}
+            />
           )}
-
+          {currentScreen === 'earnings' && <Earnings />}
           {currentScreen === 'settings' && (
-            <Settings 
-              config={config} 
-              interfaces={interfaces} 
-              onSaveConfig={handleSaveConfig} 
-            />
+            <Settings config={config} interfaces={interfaces} onSaveConfig={handleSaveConfig} />
           )}
-
           {currentScreen === 'about' && (
-            <About 
-              config={config} 
-              logs={logs} 
-            />
+            <About config={config} logs={logs} />
           )}
         </section>
       </main>
