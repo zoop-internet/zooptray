@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
@@ -295,4 +296,27 @@ func GetRealWGPeers() ([]ClientInfo, error) {
 	}
 
 	return peers, nil
+}
+
+// GetDefaultRouteInterface finds the active network interface by parsing /proc/net/route
+func GetDefaultRouteInterface() string {
+	file, err := os.Open("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			// The second field is the destination IP in hex.
+			// Default route has destination "00000000".
+			if fields[1] == "00000000" {
+				return fields[0] // Interface name
+			}
+		}
+	}
+	return ""
 }

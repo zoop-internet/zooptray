@@ -390,7 +390,10 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 
 			iface := cfg.System.PreferredInterface
 			if iface == "" {
-				iface = "wlan0"
+				iface = GetDefaultRouteInterface()
+				if iface == "" {
+					iface = "wlan0"
+				}
 			}
 
 			if err := CreateWGConfig(privKey, iface); err != nil {
