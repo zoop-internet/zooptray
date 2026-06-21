@@ -104,11 +104,8 @@ func (n *NodeService) Shutdown(ctx context.Context) {
 	close(n.stopChan)
 }
 
-// addLog appends a log entry and emits it to the frontend
-func (n *NodeService) addLog(level, message string) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
+// addLogLocked appends a log entry and emits it without locking n.mu (caller must hold the lock)
+func (n *NodeService) addLogLocked(level, message string) {
 	logEntry := LogMessage{
 		Timestamp: time.Now().Format("15:04:05"),
 		Level:     level,
@@ -121,10 +118,30 @@ func (n *NodeService) addLog(level, message string) {
 		n.logs = n.logs[1:]
 	}
 
+	// Print to stdout for debugging
+	fmt.Printf("[%s] %s: %s\n", logEntry.Timestamp, logEntry.Level, logEntry.Message)
+
+	// Write to ~/.zoop/zoop.log for persistent debugging
+	if home, err := os.UserHomeDir(); err == nil {
+		logFile := filepath.Join(home, ".zoop", "zoop.log")
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			fmt.Fprintf(f, "[%s] %s: %s\n", logEntry.Timestamp, logEntry.Level, logEntry.Message)
+			f.Close()
+		}
+	}
+
 	// Emit event to frontend if context exists
 	if n.ctx != nil {
 		wailsRuntime.EventsEmit(n.ctx, "log_added", logEntry)
 	}
+}
+
+// addLog appends a log entry and emits it to the frontend
+func (n *NodeService) addLog(level, message string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.addLogLocked(level, message)
 }
 
 // runSimulationLoop ticks every 2 seconds to simulate network activity
@@ -162,7 +179,7 @@ func (n *NodeService) runSimulationLoop() {
 				Speed:       float64(rand.Intn(100)+20) / 10.0,
 				DataShared:  float64(rand.Intn(450)+50),
 			})
-			n.addLog("info", fmt.Sprintf("Client %s (%s) routing established.", c.Name, c.MAC))
+			n.addLogLocked("info", fmt.Sprintf("Client %s (%s) routing established.", c.Name, c.MAC))
 		}
 	}
 	n.mu.Unlock()
@@ -208,7 +225,7 @@ func (n *NodeService) runSimulationLoop() {
 					n.telemetry.SharingEnabled = true
 
 					if rand.Float32() < 0.05 {
-						n.addLog("info", fmt.Sprintf("Telemetry heartbeat sent. Active peers: %d, Data shared: %.4f GB", len(n.clients), n.telemetry.TotalDataShared))
+						n.addLogLocked("info", fmt.Sprintf("Telemetry heartbeat sent. Active peers: %d, Data shared: %.4f GB", len(n.clients), n.telemetry.TotalDataShared))
 					}
 				} else {
 					// 2. Fallback to client simulation
@@ -241,14 +258,14 @@ func (n *NodeService) runSimulationLoop() {
 								DataShared:  0,
 							}
 							n.clients = append(n.clients, newClient)
-							n.addLog("info", fmt.Sprintf("New client %s joined guest hotspot.", target.Name))
+							n.addLogLocked("info", fmt.Sprintf("New client %s joined guest hotspot.", target.Name))
 						}
 					} else if len(n.clients) > 0 && rand.Float32() < 0.08 {
 						// Remove a random client (client left)
 						idx := rand.Intn(len(n.clients))
 						leftClient := n.clients[idx]
 						n.clients = append(n.clients[:idx], n.clients[idx+1:]...)
-						n.addLog("info", fmt.Sprintf("Client %s disconnected from guest hotspot.", leftClient.Name))
+						n.addLogLocked("info", fmt.Sprintf("Client %s disconnected from guest hotspot.", leftClient.Name))
 					}
 
 					// Update speeds and data shared per client
@@ -277,7 +294,7 @@ func (n *NodeService) runSimulationLoop() {
 
 					// Periodically emit telemetry to cloud api (simulated log event)
 					if rand.Float32() < 0.05 {
-						n.addLog("info", fmt.Sprintf("Telemetry heartbeat sent. Active connections: %d, Data shared: %.4f GB", len(n.clients), n.telemetry.TotalDataShared))
+						n.addLogLocked("info", fmt.Sprintf("Telemetry heartbeat sent. Active connections: %d, Data shared: %.4f GB", len(n.clients), n.telemetry.TotalDataShared))
 					}
 				}
 
@@ -315,11 +332,11 @@ func (n *NodeService) SaveConfig(cfg *Config) error {
 
 	// Sync autostart settings with OS
 	if err := updateAutostart(cfg.System.AutoStartOnBoot); err != nil {
-		n.addLog("error", fmt.Sprintf("Failed to update autostart setting: %v", err))
+		n.addLogLocked("error", fmt.Sprintf("Failed to update autostart setting: %v", err))
 	}
 
 	// Trigger log
-	n.addLog("info", "Configuration settings updated and saved locally.")
+	n.addLogLocked("info", "Configuration settings updated and saved locally.")
 
 	// Save to config file
 	return SaveConfig(cfg)
@@ -470,7 +487,7 @@ func (n *NodeService) DisconnectClient(mac string) bool {
 	for i, cl := range n.clients {
 		if cl.MAC == mac {
 			n.clients = append(n.clients[:i], n.clients[i+1:]...)
-			n.addLog("warning", fmt.Sprintf("Client %s (%s) kicked and blocked by administrator policy.", cl.Name, mac))
+			n.addLogLocked("warning", fmt.Sprintf("Client %s (%s) kicked and blocked by administrator policy.", cl.Name, mac))
 			
 			// Kick client from WireGuard interface
 			go func(pubKey string) {

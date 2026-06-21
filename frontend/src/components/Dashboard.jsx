@@ -102,8 +102,8 @@ export default function Dashboard({
                   <Loader size={24} className="wg-spin" />
                 </div>
                 <div>
-                  <div className="wg-loading-title">Configuring Zoop Network…</div>
-                  <div className="wg-loading-sub">Generating keys, writing config, bringing up interface.</div>
+                  <div className="wg-loading-title">Zooping you in…</div>
+                  <div className="wg-loading-sub">Generating credentials, configuring routing, and establishing your Zoop tunnel.</div>
                 </div>
               </div>
             )}
