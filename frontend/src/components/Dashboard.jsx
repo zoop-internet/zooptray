@@ -17,6 +17,8 @@ export default function Dashboard({
 }) {
   const isOnline = telemetry.sharingEnabled;
   const [showWgModal, setShowWgModal] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedField, setCopiedField] = useState(null);
 
   // Automatically reopen modal when loading initiates
   React.useEffect(() => {
