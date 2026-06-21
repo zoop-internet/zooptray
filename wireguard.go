@@ -121,11 +121,23 @@ func StopWGTunnel() error {
 		return err
 	}
 
+	// Check whether the interface is actually up before trying to bring it down
+	checkCmd := exec.Command("sudo", "wg", "show", "wg-zoop")
+	if checkErr := checkCmd.Run(); checkErr != nil {
+		// Interface not found / not running — nothing to stop
+		return nil
+	}
+
 	cmd := exec.Command("sudo", "wg-quick", "down", configPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// If already down, don't fail
-		return fmt.Errorf("failed to stop tunnel: %s (%v)", string(output), err)
+		// Suppress "not running" errors gracefully
+		errStr := string(output)
+		if strings.Contains(errStr, "is not a WireGuard interface") ||
+			strings.Contains(errStr, "does not exist") {
+			return nil
+		}
+		return fmt.Errorf("failed to stop tunnel: %s (%v)", errStr, err)
 	}
 
 	return nil
