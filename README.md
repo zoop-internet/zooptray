@@ -35,11 +35,51 @@ While the **Zoop Console** serves as the administrative dashboard for managing a
 ## 🚀 Key Features
 
 *   **Zero-Disruption Background Operation**: Operates silently inside the system tray (macOS Menu Bar, Windows Taskbar, Linux System Tray) without cluttering the screen or impacting daily productivity.
-*   **Local Node Provisioning**: Turns any desktop or laptop network interface into a secure, access-controlled gateway hotspot for Zoop clients.
-*   **Hardware Policy Enforcement**: Applies sharing limits, traffic rules, and bandwidth caps directly at the local OS firewall level to guarantee performance for the host computer.
-*   **Automatic Node Discovery**: Continuously broadcasts local telemetry (signal strength, latency, device load) to the Zoop platform, making the node discoverable to nearby consumers looking for high-quality connections.
-*   **Offline Fallbacks**: Automatically suspends sharing or shuts down connections if the host computer falls below configured battery thresholds or if the host's primary internet link disconnects.
+*   **Cross-Platform Support**: Now supports Linux, macOS, and Windows with platform-specific WireGuard integration and auto-start functionality.
+*   **Local Node Provisioning**: Creates and manages a local WireGuard interface for Zoop client routing on all supported platforms.
+*   **Automatic Dependency Management**: Installs required WireGuard tools automatically on Linux (via apt/dnf/pacman) and provides clear installation instructions for macOS (Homebrew) and Windows.
+*   **Platform-Specific NAT Configuration**: Uses iptables on Linux, pf on macOS, and provides guidance for Windows netsh configuration.
+*   **Hardware Policy Enforcement (planned)**: Sharing limits, firewall isolation policy, and bandwidth caps are UI/config concepts until OS-level enforcement is wired in.
+*   **Automatic Node Discovery (planned)**: Cloud discovery and telemetry broadcasting are not active in the current desktop build.
+*   **Offline Fallbacks (planned)**: Battery and upstream-link shutdown policies are documented goals, not active runtime behavior yet.
 *   **Zero-Config Handshake**: Generates a secure cryptographic identity key during installation to pair with the Zoop Console instantly.
+
+---
+
+## 🌍 Cross-Platform Support
+
+Zoop One now supports Linux, macOS, and Windows with platform-specific optimizations:
+
+### Platform Requirements
+
+| Platform | WireGuard Installation | Auto-Start Method | NAT Configuration |
+|----------|----------------------|------------------|-------------------|
+| **Linux** | `wireguard-tools` (auto-installed) | `.desktop` file | iptables |
+| **macOS** | `wireguard-tools` via Homebrew | launchd plist | pf (Packet Filter) |
+| **Windows** | WireGuard MSI installer | Startup folder | netsh (manual setup) |
+
+### Platform-Specific Setup
+
+#### Linux (Debian/Ubuntu/Fedora/Arch)
+```bash
+# Automatic setup (handled by the application)
+sudo apt install wireguard wireguard-tools  # Debian/Ubuntu
+sudo dnf install wireguard-tools           # Fedora/RHEL
+sudo pacman -S wireguard-tools              # Arch Linux
+```
+
+#### macOS
+```bash
+# Install WireGuard tools via Homebrew
+brew install wireguard-tools
+
+# The application will automatically create a launchd plist for auto-start
+```
+
+#### Windows
+1. Download and install WireGuard from https://www.wireguard.com/install/
+2. The application will create a startup shortcut for auto-launch
+3. NAT configuration may require manual setup using `netsh` or PowerShell
 
 ---
 
@@ -90,14 +130,18 @@ The background daemon reads its operational rules from a local JSON settings fil
 
 ## 🔒 Security & Sandboxing
 
-Zoop One is designed with a strict security-first architecture to protect node hosts:
-1.  **Isolated Guest Network**: Routed guest traffic is sandboxed and completely segregated from the host's local private intranet (LAN). Guest devices cannot communicate with the host's personal devices (e.g., home printers, local file shares, private smart TVs).
-2.  **Encrypted Tunneling**: All data shared from consumer to provider node is wrapped inside a secure cryptographic tunnel, protecting guest privacy and preventing the host from seeing user-specific payload details.
-3.  **Cryptographic Identity Verification**: Connections are authorized using a pre-authenticated handshake protocol verified through the Zoop Core backend. Unapproved devices are instantly blocked at the firewall.
+Zoop One is designed with a strict security-first architecture to protect node hosts across all platforms:
+1.  **WireGuard Tunnel**: Guest traffic uses WireGuard encryption while the local tunnel is active on all supported platforms.
+2.  **Platform-Specific Firewall Integration**:
+    - **Linux**: iptables for NAT and basic isolation
+    - **macOS**: pf (Packet Filter) for NAT configuration
+    - **Windows**: netsh integration with manual setup guidance
+3.  **Cryptographic Identity Verification (planned)**: Backend-verified client authorization is not active in this local desktop build yet.
+4.  **Cross-Platform Key Management**: Secure storage of WireGuard keys in platform-appropriate locations (`~/.zoop/` on Unix, AppData on Windows).
 
 ---
 
 ## 🤝 Interaction with Zoop Console
 
-*   **Monitoring**: While Zoop One does the heavy lifting of routing packets, the **Zoop Console** provides the real-time visual interface.
-*   **Analytics**: Historical bandwidth allocation charts, revenue statistics, and device logs are logged securely by Zoop One and forwarded to the cloud, so you can explore them at your leisure on the web console.
+*   **Monitoring (planned)**: The desktop app currently shows local WireGuard status; console integration is pending.
+*   **Analytics (planned)**: Historical bandwidth allocation charts, revenue statistics, and cloud-forwarded device logs are not active in this release.

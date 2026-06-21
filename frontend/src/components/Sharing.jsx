@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { Wifi, CheckCircle2, Copy, Check, Zap, Shield } from 'lucide-react';
-import Dropdown from './Dropdown';
+import { Wifi, Copy, Check, Zap, Shield } from 'lucide-react';
 import { toast } from './Toast';
 
 export default function Sharing({ 
@@ -9,29 +8,13 @@ export default function Sharing({
   onToggleSharing, 
   uptimeString 
 }) {
-  const isOnline = telemetry.sharingEnabled;
+  const isOnline = telemetry.tunnelActive;
+  const publicIP = telemetry.publicIP || 'Not detected';
   const [copied, setCopied] = useState(false);
 
-  const [uploadLimit, setUploadLimit] = useState('50mbps');
-  const [downloadLimit, setDownloadLimit] = useState('100mbps');
-
-  const uploadOptions = [
-    { label: '10 Mbps',   value: '10mbps' },
-    { label: '25 Mbps',   value: '25mbps' },
-    { label: '50 Mbps',   value: '50mbps' },
-    { label: '100 Mbps',  value: '100mbps' },
-    { label: 'Unlimited', value: 'unlimited' },
-  ];
-  const downloadOptions = [
-    { label: '50 Mbps',   value: '50mbps' },
-    { label: '100 Mbps',  value: '100mbps' },
-    { label: '200 Mbps',  value: '200mbps' },
-    { label: '500 Mbps',  value: '500mbps' },
-    { label: 'Unlimited', value: 'unlimited' },
-  ];
-
   const handleCopyIP = () => {
-    navigator.clipboard.writeText('73.45.67.89');
+    if (!telemetry.publicIP) return;
+    navigator.clipboard.writeText(telemetry.publicIP);
     setCopied(true);
     toast.success('IP address copied to clipboard');
     setTimeout(() => setCopied(false), 2000);
@@ -85,27 +68,30 @@ export default function Sharing({
 
       {/* Controls + Stats grid */}
       <div className="sharing-grid">
-        {/* Speed limits card */}
         <div className="speed-limits-card">
           <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Zap size={16} color="var(--blue)" />
-            Speed Limits
+            Live Throughput
           </h3>
 
           <div className="form-row">
             <div className="form-row-left">
-              <span className="form-row-label">Max Upload Speed</span>
-              <span className="form-row-desc">Cap outbound bandwidth per client.</span>
+              <span className="form-row-label">Upload Speed</span>
+              <span className="form-row-desc">Measured from WireGuard transfer counters.</span>
             </div>
-            <Dropdown value={uploadLimit} onChange={setUploadLimit} options={uploadOptions} />
+            <div style={{ fontSize: '13.5px', fontFamily: 'var(--mono)', color: 'var(--muted)', background: 'var(--surface-soft)', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              {isOnline ? `${telemetry.uploadSpeed.toFixed(1)} Mbps` : '0.0 Mbps'}
+            </div>
           </div>
 
           <div className="form-row">
             <div className="form-row-left">
-              <span className="form-row-label">Max Download Speed</span>
-              <span className="form-row-desc">Cap inbound bandwidth per client.</span>
+              <span className="form-row-label">Download Speed</span>
+              <span className="form-row-desc">Measured from WireGuard transfer counters.</span>
             </div>
-            <Dropdown value={downloadLimit} onChange={setDownloadLimit} options={downloadOptions} />
+            <div style={{ fontSize: '13.5px', fontFamily: 'var(--mono)', color: 'var(--muted)', background: 'var(--surface-soft)', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              {isOnline ? `${telemetry.downloadSpeed.toFixed(1)} Mbps` : '0.0 Mbps'}
+            </div>
           </div>
 
           <div className="form-row">
@@ -135,8 +121,8 @@ export default function Sharing({
           <div className="sharing-mini-card">
             <span className="lbl">IP Address</span>
             <div className="val-wrap">
-              <span className="val">73.45.67.89</span>
-              <button type="button" className="copy-btn" onClick={handleCopyIP} title="Copy IP">
+              <span className="val">{publicIP}</span>
+              <button type="button" className="copy-btn" onClick={handleCopyIP} title="Copy IP" disabled={!telemetry.publicIP}>
                 {copied ? <Check size={16} color="var(--green)" /> : <Copy size={16} />}
               </button>
             </div>
@@ -164,7 +150,7 @@ export default function Sharing({
       {/* Security note */}
       <div className="sharing-security-note">
         <Shield size={15} />
-        <span>All guest traffic is routed through the Zoop encrypted relay. Client devices cannot access your local network.</span>
+        <span>Guest traffic uses the local WireGuard tunnel when sharing is active. LAN isolation depends on the generated firewall rules.</span>
       </div>
     </div>
   );

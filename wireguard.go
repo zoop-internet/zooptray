@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,24 +64,75 @@ func GetWGConfigPath() (string, error) {
 	return filepath.Join(home, ".zoop", "wg-zoop.conf"), nil
 }
 
+// GetWGInterfaceName derives the WireGuard interface name from its config file.
+func GetWGInterfaceName() (string, error) {
+	configPath, err := GetWGConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(filepath.Base(configPath), ".conf"), nil
+}
+
 // CreateWGConfig generates a standard WireGuard config file for the sharing hotspot
 func CreateWGConfig(privateKey, preferredInterface string) error {
 	configPath, err := GetWGConfigPath()
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+	if preferredInterface == "" {
+		return fmt.Errorf("preferred network interface is required")
+	}
+	if _, err := net.InterfaceByName(preferredInterface); err != nil {
+		return fmt.Errorf("preferred network interface %q is not available: %w", preferredInterface, err)
+	}
 
-	// Default template for Zoop sharing server interface
-	// Runs NAT forwarding so clients can access the internet
-	content := fmt.Sprintf(`[Interface]
+	// Generate platform-specific WireGuard configuration
+	var content string
+	switch runtime.GOOS {
+	case "linux":
+		// Linux uses iptables for NAT
+		content = fmt.Sprintf(`[Interface]
 PrivateKey = %s
 ListenPort = 51820
 Address = 10.200.0.1/24
 
 # Packet forwarding & NAT configuration
-PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE
-PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE
+PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE
+PostDown = iptables -D FORWARD -i %%i -j ACCEPT || true; iptables -D FORWARD -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || true; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE || true
 `, privateKey, preferredInterface, preferredInterface)
+	case "darwin":
+		// macOS uses pf for NAT
+		content = fmt.Sprintf(`[Interface]
+PrivateKey = %s
+ListenPort = 51820
+Address = 10.200.0.1/24
+
+# macOS NAT configuration using pf
+PostUp = echo "nat on %s from 10.200.0.0/24 to any -> (%s)" | pfctl -ef -
+PostDown = pfctl -F all -f /etc/pf.conf
+`, privateKey, preferredInterface, preferredInterface)
+	case "windows":
+		// Windows uses netsh for NAT (simplified - actual implementation may need admin setup)
+		content = fmt.Sprintf(`[Interface]
+PrivateKey = %s
+ListenPort = 51820
+Address = 10.200.0.1/24
+
+# Windows NAT note: Manual setup required via netsh or PowerShell
+# PostUp = netsh interface portproxy add v4tov4 listenport=51820 listenaddress=0.0.0.0 connectport=51820 connectaddress=10.200.0.1
+# PostDown = netsh interface portproxy delete v4tov4 listenport=51820 listenaddress=0.0.0.0
+`, privateKey)
+	default:
+		// Basic configuration without NAT for unsupported platforms
+		content = fmt.Sprintf(`[Interface]
+PrivateKey = %s
+ListenPort = 51820
+Address = 10.200.0.1/24
+`, privateKey)
+	}
 
 	return os.WriteFile(configPath, []byte(content), 0600)
 }
@@ -129,118 +181,62 @@ func InstallWGDependenciesIfNeeded() error {
 
 // StartWGTunnel calls wg-quick to start the WireGuard interface
 func StartWGTunnel() error {
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("zoop tunnel is only supported on Linux in this release")
-	}
-
-	// Automatically check and install dependencies if missing
-	if err := InstallWGDependenciesIfNeeded(); err != nil {
-		return err
-	}
-
+	manager := GetWireGuardManager()
 	configPath, err := GetWGConfigPath()
 	if err != nil {
 		return err
 	}
-
-	// Check if config file exists
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return fmt.Errorf("zoop configuration file not found: %s", configPath)
-	}
-
-	// Execute wg-quick up
-	cmd := exec.Command("sudo", "-n", "wg-quick", "up", configPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to start tunnel: %s (%v)", string(output), err)
-	}
-
-	return nil
+	return manager.StartTunnel(configPath)
 }
 
 // StopWGTunnel calls wg-quick to stop the WireGuard interface
 func StopWGTunnel() error {
-	if runtime.GOOS != "linux" {
-		return nil // NOP on other platforms
-	}
-
+	manager := GetWireGuardManager()
 	configPath, err := GetWGConfigPath()
 	if err != nil {
 		return err
 	}
-
-	// Check whether the interface is actually up before trying to bring it down
-	checkCmd := exec.Command("sudo", "-n", "wg", "show", "wg-zoop")
-	if checkErr := checkCmd.Run(); checkErr != nil {
-		// Interface not found / not running — nothing to stop
-		return nil
-	}
-
-	cmd := exec.Command("sudo", "-n", "wg-quick", "down", configPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Suppress "not running" errors gracefully
-		errStr := string(output)
-		if strings.Contains(errStr, "is not a WireGuard interface") ||
-			strings.Contains(errStr, "does not exist") {
-			return nil
-		}
-		return fmt.Errorf("failed to stop tunnel: %s (%v)", errStr, err)
-	}
-
-	return nil
+	return manager.StopTunnel(configPath)
 }
 
 // AddWGPeer registers a client peer on the WireGuard interface
 func AddWGPeer(peerPubKey, clientIP string) error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-
-	cmd := exec.Command("sudo", "-n", "wg", "set", "wg-zoop", "peer", peerPubKey, "allowed-ips", clientIP+"/32")
-	output, err := cmd.CombinedOutput()
+	manager := GetWireGuardManager()
+	ifName, err := GetWGInterfaceName()
 	if err != nil {
-		return fmt.Errorf("failed to add peer: %s (%v)", string(output), err)
+		return err
 	}
-
-	return nil
+	return manager.AddPeer(ifName, peerPubKey, clientIP+"/32")
 }
 
 // RemoveWGPeer deletes a client peer from the WireGuard interface
 func RemoveWGPeer(peerPubKey string) error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-
-	cmd := exec.Command("sudo", "-n", "wg", "set", "wg-zoop", "peer", peerPubKey, "remove")
-	output, err := cmd.CombinedOutput()
+	manager := GetWireGuardManager()
+	ifName, err := GetWGInterfaceName()
 	if err != nil {
-		return fmt.Errorf("failed to remove peer: %s (%v)", string(output), err)
+		return err
 	}
-
-	return nil
+	return manager.RemovePeer(ifName, peerPubKey)
 }
 
 // GetRealWGPeers runs wg show wg-zoop dump to return a slice of ClientInfo representing real WireGuard peers
 func GetRealWGPeers() ([]ClientInfo, error) {
-	if runtime.GOOS != "linux" {
-		return nil, fmt.Errorf("supported only on Linux")
-	}
-
-	// Resolve config path to know interface name (it names the interface after the config filename)
-	configPath, err := GetWGConfigPath()
-	if err != nil {
-		return nil, err
-	}
-	ifName := strings.TrimSuffix(filepath.Base(configPath), ".conf")
-
-	cmd := exec.Command("sudo", "-n", "wg", "show", ifName, "dump")
-	outputBytes, err := cmd.CombinedOutput()
+	manager := GetWireGuardManager()
+	ifName, err := GetWGInterfaceName()
 	if err != nil {
 		return nil, err
 	}
 
-	output := string(outputBytes)
+	peersOutput, err := manager.GetPeers(ifName)
+	if err != nil {
+		return nil, err
+	}
+
+	return ParseWGDump(peersOutput), nil
+}
+
+// ParseWGDump parses "wg show <iface> dump" output into display-ready clients.
+func ParseWGDump(output string) []ClientInfo {
 	lines := strings.Split(output, "\n")
 	var peers []ClientInfo
 
@@ -295,26 +291,61 @@ func GetRealWGPeers() ([]ClientInfo, error) {
 		})
 	}
 
-	return peers, nil
+	return peers
 }
 
-// GetDefaultRouteInterface finds the active network interface by parsing /proc/net/route
+// GetDefaultRouteInterface finds the active network interface using platform-specific methods
 func GetDefaultRouteInterface() string {
-	file, err := os.Open("/proc/net/route")
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
+	switch runtime.GOOS {
+	case "linux":
+		// Linux: parse /proc/net/route
+		file, err := os.Open("/proc/net/route")
+		if err != nil {
+			return ""
+		}
+		defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Fields(line)
-		if len(fields) >= 2 {
-			// The second field is the destination IP in hex.
-			// Default route has destination "00000000".
-			if fields[1] == "00000000" {
-				return fields[0] // Interface name
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				// The second field is the destination IP in hex.
+				// Default route has destination "00000000".
+				if fields[1] == "00000000" {
+					return fields[0] // Interface name
+				}
+			}
+		}
+	case "darwin":
+		// macOS: use 'route get default' command
+		cmd := exec.Command("route", "get", "default")
+		output, err := cmd.Output()
+		if err == nil {
+			lines := strings.Split(string(output), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "   interface: ") {
+					parts := strings.Split(line, ": ")
+					if len(parts) == 2 {
+						return strings.TrimSpace(parts[1])
+					}
+				}
+			}
+		}
+	case "windows":
+		// Windows: use 'netsh interface ipv4 show interfaces' command
+		cmd := exec.Command("netsh", "interface", "ipv4", "show", "interfaces")
+		output, err := cmd.Output()
+		if err == nil {
+			lines := strings.Split(string(output), "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "Connected") && strings.Contains(line, "Dedicated") {
+					fields := strings.Fields(line)
+					if len(fields) >= 1 {
+						// The interface name is typically the first field
+						return strings.TrimSpace(fields[0])
+					}
+				}
 			}
 		}
 	}

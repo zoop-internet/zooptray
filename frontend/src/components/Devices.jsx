@@ -18,7 +18,7 @@ export default function Devices({ clients, telemetry, onDisconnectClient }) {
   const [search, setSearch] = useState('');
   const [confirmKick, setConfirmKick] = useState(null); // mac address to confirm kick
 
-  const isOnline = telemetry.sharingEnabled;
+  const isOnline = telemetry.tunnelActive;
 
   const filtered = clients.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Check, Pause, Play, ArrowUp, CheckCircle, AlertCircle, Copy,
-  Shield, Key, Globe, Loader, AlertTriangle, ChevronDown, ChevronUp, Server
+  Check, Pause, Play, CheckCircle, AlertCircle, Copy,
+  Shield, Key, Globe, Loader, AlertTriangle, Server
 } from 'lucide-react';
 import { toast } from './Toast';
 
@@ -15,7 +15,8 @@ export default function Dashboard({
   wgInfo,
   wgLoading,
 }) {
-  const isOnline = telemetry.sharingEnabled;
+  const isOnline = telemetry.tunnelActive;
+  const publicIP = telemetry.publicIP || 'Not detected';
   const [showWgModal, setShowWgModal] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedField, setCopiedField] = useState(null);
@@ -36,6 +37,7 @@ export default function Dashboard({
   };
 
   const handleCopyField = (key, value) => {
+    if (!value) return;
     navigator.clipboard.writeText(value);
     setCopiedField(key);
     toast.success(`${key} copied!`);
@@ -84,7 +86,7 @@ export default function Dashboard({
 
   // Client-side peer block template
   const peerBlock = wgInfo
-    ? `[Interface]\nPrivateKey = <CLIENT_PRIVATE_KEY>\nAddress = 10.200.0.2/32\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = ${wgInfo.publicKey}\nEndpoint = <YOUR_PUBLIC_IP>:${wgInfo.listenPort}\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25`
+    ? `[Interface]\nPrivateKey = <CLIENT_PRIVATE_KEY>\nAddress = 10.200.0.2/32\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = ${wgInfo.publicKey || '<SERVER_PUBLIC_KEY>'}\nEndpoint = <YOUR_PUBLIC_IP>:${wgInfo.listenPort || 51820}\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25`
     : '';
 
   return (
@@ -233,9 +235,11 @@ export default function Dashboard({
               <p>
                 {wgLoading
                   ? 'Configuring keys and interface. This takes a few seconds.'
+                  : telemetry.tunnelError
+                    ? telemetry.tunnelError
                   : isOnline 
                     ? 'Your device is actively sharing network resources with the decentralized network.' 
-                    : 'Hotspot disabled. everyday providers are offline.'
+                    : 'Hotspot disabled. No guest traffic is being routed.'
                 }
               </p>
             </div>
@@ -281,7 +285,7 @@ export default function Dashboard({
           </div>
           <div className="meta-row">
             <span className="meta-label">IP Address</span>
-            <span className="meta-value">73.45.67.89</span>
+            <span className="meta-value">{publicIP}</span>
           </div>
         </div>
       </div>
@@ -311,8 +315,7 @@ export default function Dashboard({
           </div>
 
           <div className="telemetry-footer up">
-            <ArrowUp size={12} />
-            <span>8.7 Mbps vs yesterday</span>
+            <span>{isOnline ? 'Live WireGuard throughput' : 'No active tunnel'}</span>
           </div>
         </div>
 
@@ -339,8 +342,7 @@ export default function Dashboard({
           </div>
 
           <div className="telemetry-footer up" style={{ color: 'var(--green)' }}>
-            <ArrowUp size={12} />
-            <span>15.8% vs yesterday</span>
+            <span>{isOnline ? 'Total from WireGuard counters' : 'No active tunnel'}</span>
           </div>
         </div>
 
@@ -350,7 +352,7 @@ export default function Dashboard({
             <span className="telemetry-label">Status</span>
             <div className="telemetry-value-wrap" style={{ marginTop: '4px' }}>
               <span className="telemetry-value" style={{ fontSize: '22px', fontFamily: 'var(--font)', fontWeight: '700' }}>
-                {wgLoading ? 'Initializing' : isOnline ? 'Healthy' : 'Offline'}
+                {wgLoading ? 'Initializing' : isOnline ? 'Healthy' : telemetry.tunnelError ? 'Error' : 'Offline'}
               </span>
             </div>
           </div>
@@ -358,7 +360,7 @@ export default function Dashboard({
           <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '8px' }}>
             {wgLoading
               ? 'Zoop connection starting up…'
-              : isOnline ? 'All systems operational' : 'Sharing is currently disabled by policy'
+              : isOnline ? 'All systems operational' : telemetry.tunnelError ? telemetry.tunnelError : 'Sharing is currently disabled by policy'
             }
           </div>
 

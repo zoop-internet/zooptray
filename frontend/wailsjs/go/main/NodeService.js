@@ -18,6 +18,10 @@ export function GetLogs() {
   return window['go']['main']['NodeService']['GetLogs']();
 }
 
+export function GetTunnelStatus() {
+  return window['go']['main']['NodeService']['GetTunnelStatus']();
+}
+
 export function SaveConfig(arg1) {
   return window['go']['main']['NodeService']['SaveConfig'](arg1);
 }

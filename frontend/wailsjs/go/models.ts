@@ -118,6 +118,35 @@ export namespace main {
 	}
 	
 	
+	
+	export class Telemetry {
+	    uploadSpeed: number;
+	    downloadSpeed: number;
+	    activeClientsCount: number;
+	    totalDataShared: number;
+	    sharingEnabled: boolean;
+	    tunnelActive: boolean;
+	    tunnelError: string;
+	    startedAt: string;
+	    publicIP: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Telemetry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.uploadSpeed = source["uploadSpeed"];
+	        this.downloadSpeed = source["downloadSpeed"];
+	        this.activeClientsCount = source["activeClientsCount"];
+	        this.totalDataShared = source["totalDataShared"];
+	        this.sharingEnabled = source["sharingEnabled"];
+	        this.tunnelActive = source["tunnelActive"];
+	        this.tunnelError = source["tunnelError"];
+	        this.startedAt = source["startedAt"];
+	        this.publicIP = source["publicIP"];
+	    }
+	}
 
 }
 

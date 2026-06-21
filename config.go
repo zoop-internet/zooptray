@@ -61,14 +61,14 @@ func GetDefaultConfig() *Config {
 			IsPublic:       true,
 		},
 		Sharing: SharingConfig{
-			Enabled:             true,
+			Enabled:             false,
 			MaxClients:          10,
 			BandwidthCapPercent: 68,
 			RoutingPolicy:       "balanced",
 		},
 		System: SystemConfig{
-			AutoStartOnBoot:    true,
-			PreferredInterface: "wlan0",
+			AutoStartOnBoot:    false,
+			PreferredInterface: "",
 		},
 		API: ApiConfig{
 			Endpoint:                 "https://api.zoopnetwork.com/v1",

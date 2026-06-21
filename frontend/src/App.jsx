@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Wifi, Monitor, Wallet, Settings as SettingsIcon, Info, Sun, Moon
 } from 'lucide-react';
 import * as runtime from "../wailsjs/runtime/runtime";
-import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs } from "../wailsjs/go/main/NodeService";
+import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs, GetTunnelStatus } from "../wailsjs/go/main/NodeService";
 
 import Dashboard  from './components/Dashboard';
 import Sharing    from './components/Sharing';
@@ -24,7 +24,8 @@ export default function App() {
   const [clients, setClients]     = useState([]);
   const [telemetry, setTelemetry] = useState({
     uploadSpeed: 0, downloadSpeed: 0,
-    activeClientsCount: 0, totalDataShared: 0, sharingEnabled: false
+    activeClientsCount: 0, totalDataShared: 0, sharingEnabled: false,
+    tunnelActive: false, tunnelError: '', startedAt: '', publicIP: ''
   });
 
   const [bandwidthHistory, setBandwidthHistory] = useState(Array(20).fill(0));
@@ -34,20 +35,30 @@ export default function App() {
   const [wgInfo, setWgInfo]       = useState(null);
   const [wgLoading, setWgLoading] = useState(false);
 
-  const [startTime] = useState(Date.now() - (2 * 24 * 3600e3 + 14 * 3600e3 + 32 * 60e3));
-  const [uptimeString, setUptimeString] = useState('2d 14h 32m');
+  const [uptimeString, setUptimeString] = useState('0d 0h 0m');
 
   // Uptime ticker
   useEffect(() => {
-    const interval = setInterval(() => {
-      const diff = Date.now() - startTime;
+    const updateUptime = () => {
+      if (!telemetry.startedAt || !telemetry.tunnelActive) {
+        setUptimeString('0d 0h 0m');
+        return;
+      }
+      const startedAt = Date.parse(telemetry.startedAt);
+      if (Number.isNaN(startedAt)) {
+        setUptimeString('0d 0h 0m');
+        return;
+      }
+      const diff = Math.max(0, Date.now() - startedAt);
       const d = Math.floor(diff / (24 * 3600e3));
       const h = Math.floor((diff % (24 * 3600e3)) / 3600e3);
       const m = Math.floor((diff % 3600e3) / 60e3);
       setUptimeString(`${d}d ${h}h ${m}m`);
-    }, 5000);
+    };
+    updateUptime();
+    const interval = setInterval(updateUptime, 5000);
     return () => clearInterval(interval);
-  }, [startTime]);
+  }, [telemetry.startedAt, telemetry.tunnelActive]);
 
   // Apply and persist theme
   useEffect(() => {
@@ -64,6 +75,9 @@ export default function App() {
 
     GetInterfaces().then(setInterfaces).catch(console.error);
     GetLogs().then(l => setLogs(l || [])).catch(console.error);
+    GetTunnelStatus().then(status => {
+      if (status) setTelemetry(prev => ({ ...prev, ...status }));
+    }).catch(console.error);
   }, []);
 
   // Real-time Wails events
@@ -71,8 +85,8 @@ export default function App() {
     runtime.EventsOn('telemetry_updated', (data) => {
       setTelemetry(data);
       const totalSpeed = data.uploadSpeed + data.downloadSpeed;
-      setBandwidthHistory(prev => [...prev.slice(1), totalSpeed]);
-      setDataHistory(prev => [...prev.slice(1), data.totalDataShared]);
+      setBandwidthHistory(prev => data.tunnelActive ? [...prev.slice(1), totalSpeed] : Array(20).fill(0));
+      setDataHistory(prev => data.tunnelActive ? [...prev.slice(1), data.totalDataShared] : Array(20).fill(0));
     });
     runtime.EventsOn('clients_updated', (data) => setClients(data || []));
     runtime.EventsOn('log_added', (newLog) => {
@@ -113,7 +127,9 @@ export default function App() {
       setWgLoading(false);
     }
     ToggleSharing(nextState).then(result => {
-      setTelemetry(prev => ({ ...prev, sharingEnabled: result }));
+      if (!nextState) {
+        setTelemetry(prev => ({ ...prev, sharingEnabled: result, tunnelActive: result }));
+      }
     });
   };
 
@@ -126,7 +142,6 @@ export default function App() {
   const handleSaveConfig = (updatedConfig) => {
     return SaveConfig(updatedConfig).then(() => {
       setConfig(updatedConfig);
-      setTelemetry(prev => ({ ...prev, sharingEnabled: updatedConfig.sharing.enabled }));
     });
   };
 
@@ -185,9 +200,9 @@ export default function App() {
         {/* Status Footer */}
         <div className="sidebar-status-card">
           <div className="sidebar-status-header">
-            <div className={`status-dot ${telemetry.sharingEnabled ? 'green' : 'red'}`}></div>
+            <div className={`status-dot ${telemetry.tunnelActive ? 'green' : 'red'}`}></div>
             <span className="sidebar-status-text">
-              {telemetry.sharingEnabled ? 'Connected' : 'Offline'}
+              {telemetry.tunnelActive ? 'Connected' : 'Offline'}
             </span>
           </div>
           <div className="sidebar-status-version">v1.0.0</div>
