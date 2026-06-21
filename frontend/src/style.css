@@ -1710,25 +1710,55 @@ input:checked + .toggle-slider:before {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   WireGuard Loading Banner
+   Zoop Connection Modal Overlay & Content
 ═══════════════════════════════════════════════════════════ */
-.wg-loading-banner {
+.wg-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(8, 10, 18, 0.82);
+  backdrop-filter: blur(12px);
   display: flex;
   align-items: center;
-  gap: 16px;
+  justify-content: center;
+  z-index: 9999;
+  animation: wg-fade-in 0.2s ease-out;
+}
+
+.wg-modal-content {
   background: var(--surface-card);
-  border: 1px solid var(--blue);
-  border-radius: var(--r);
-  padding: 16px 20px;
-  animation: fadeSlideIn 0.35s ease;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  width: 90%;
+  max-width: 580px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  animation: wg-scale-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.wg-loading-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 16px;
+  padding: 20px 10px;
 }
 
 .wg-loading-spinner {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: 48px;
+  height: 48px;
   background: rgba(18, 108, 255, 0.12);
   border-radius: 50%;
   flex-shrink: 0;
@@ -1736,18 +1766,19 @@ input:checked + .toggle-slider:before {
 }
 
 .wg-loading-title {
-  font-size: 14.5px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--ink);
 }
 .wg-loading-sub {
-  font-size: 12.5px;
+  font-size: 13.5px;
   color: var(--muted);
   margin-top: 3px;
+  line-height: 1.5;
 }
 
 /* ═══════════════════════════════════════════════════════════
-   WireGuard Spin Keyframe (reusable)
+   Zoop Spin Keyframe (reusable)
 ═══════════════════════════════════════════════════════════ */
 @keyframes wg-spin {
   from { transform: rotate(0deg); }
@@ -1757,23 +1788,27 @@ input:checked + .toggle-slider:before {
   animation: wg-spin 1s linear infinite;
 }
 
+@keyframes wg-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes wg-scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
 /* ═══════════════════════════════════════════════════════════
-   WireGuard Config Card
+   Zoop Config Card
 ═══════════════════════════════════════════════════════════ */
 .wg-config-card {
-  background: var(--surface-card);
-  border-radius: var(--r);
-  border: 1px solid var(--line);
-  overflow: hidden;
-  animation: fadeSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.wg-config-card.active {
-  border-color: rgba(20, 240, 109, 0.35);
-  box-shadow: 0 0 0 1px rgba(20, 240, 109, 0.08);
-}
-.wg-config-card.error {
-  border-color: rgba(255, 205, 26, 0.35);
-  box-shadow: 0 0 0 1px rgba(255, 205, 26, 0.08);
+  background: transparent;
+  border-radius: 0;
+  border: none;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .wg-config-header {

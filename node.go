@@ -361,10 +361,10 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 	if enabled {
 		n.addLog("info", "Local routing service started. Hotspot is now visible.")
 		go func() {
-			n.addLog("info", "Configuring WireGuard tunnel interface...")
+			n.addLog("info", "Configuring Zoop tunnel interface...")
 			privKey, err := getOrGenerateWGPrivateKey()
 			if err != nil {
-				n.addLog("error", fmt.Sprintf("Failed to get/generate WireGuard private key: %v", err))
+				n.addLog("error", fmt.Sprintf("Failed to get/generate Zoop private key: %v", err))
 				if n.ctx != nil {
 					wailsRuntime.EventsEmit(n.ctx, "wg_tunnel_error", WGInfo{Error: err.Error()})
 				}
@@ -377,7 +377,7 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 			}
 
 			if err := CreateWGConfig(privKey, iface); err != nil {
-				n.addLog("error", fmt.Sprintf("Failed to write wg-zoop.conf configuration: %v", err))
+				n.addLog("error", fmt.Sprintf("Failed to write Zoop tunnel configuration: %v", err))
 				if n.ctx != nil {
 					wailsRuntime.EventsEmit(n.ctx, "wg_tunnel_error", WGInfo{Error: err.Error()})
 				}
@@ -392,11 +392,11 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 
 			configPath, _ := GetWGConfigPath()
 
-			n.addLog("info", "Starting WireGuard tunnel 'wg-zoop'...")
+			n.addLog("info", "Starting Zoop tunnel...")
 			if err := StartWGTunnel(); err != nil {
-				n.addLog("error", fmt.Sprintf("Failed to start tunnel: %v. Ensure wg-quick is installed and app has sudo privileges.", err))
+				n.addLog("error", fmt.Sprintf("Failed to start tunnel: %v. Ensure Zoop connection helper is configured correctly.", err))
 				if n.ctx != nil {
-					// Even on wg-quick failure, still expose the config so user can set up manually
+					// Even on failure, still expose the config so user can set up manually
 					wailsRuntime.EventsEmit(n.ctx, "wg_tunnel_ready", WGInfo{
 						PublicKey:  pubKey,
 						PrivateKey: privKey,
@@ -409,7 +409,7 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 					})
 				}
 			} else {
-				n.addLog("info", "WireGuard tunnel is active. Interface: wg-zoop.")
+				n.addLog("info", "Zoop tunnel is active.")
 				if n.ctx != nil {
 					wailsRuntime.EventsEmit(n.ctx, "wg_tunnel_ready", WGInfo{
 						PublicKey:  pubKey,
@@ -429,11 +429,11 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 			wailsRuntime.EventsEmit(n.ctx, "wg_tunnel_stopped", nil)
 		}
 		go func() {
-			n.addLog("info", "Stopping WireGuard tunnel 'wg-zoop'...")
+			n.addLog("info", "Stopping Zoop tunnel...")
 			if err := StopWGTunnel(); err != nil {
 				n.addLog("warning", fmt.Sprintf("Tunnel stop command reported: %v", err))
 			} else {
-				n.addLog("info", "WireGuard tunnel shutdown complete.")
+				n.addLog("info", "Zoop tunnel shutdown complete.")
 			}
 		}()
 	}

@@ -93,7 +93,7 @@ func InstallWGDependenciesIfNeeded() error {
 	_, err := exec.LookPath("wg-quick")
 	if err == nil {
 		// Already installed, ensure IP forwarding is active (non-blocking)
-		_ = exec.Command("sudo", "sysctl", "-w", "net.ipv4.ip_forward=1").Run()
+		_ = exec.Command("sudo", "-n", "sysctl", "-w", "net.ipv4.ip_forward=1").Run()
 		return nil
 	}
 
@@ -129,7 +129,7 @@ func InstallWGDependenciesIfNeeded() error {
 // StartWGTunnel calls wg-quick to start the WireGuard interface
 func StartWGTunnel() error {
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("wireguard tunnel is only supported on Linux in this release")
+		return fmt.Errorf("zoop tunnel is only supported on Linux in this release")
 	}
 
 	// Automatically check and install dependencies if missing
@@ -144,11 +144,11 @@ func StartWGTunnel() error {
 
 	// Check if config file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return fmt.Errorf("wireguard configuration file not found: %s", configPath)
+		return fmt.Errorf("zoop configuration file not found: %s", configPath)
 	}
 
 	// Execute wg-quick up
-	cmd := exec.Command("sudo", "wg-quick", "up", configPath)
+	cmd := exec.Command("sudo", "-n", "wg-quick", "up", configPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to start tunnel: %s (%v)", string(output), err)
@@ -169,13 +169,13 @@ func StopWGTunnel() error {
 	}
 
 	// Check whether the interface is actually up before trying to bring it down
-	checkCmd := exec.Command("sudo", "wg", "show", "wg-zoop")
+	checkCmd := exec.Command("sudo", "-n", "wg", "show", "wg-zoop")
 	if checkErr := checkCmd.Run(); checkErr != nil {
 		// Interface not found / not running — nothing to stop
 		return nil
 	}
 
-	cmd := exec.Command("sudo", "wg-quick", "down", configPath)
+	cmd := exec.Command("sudo", "-n", "wg-quick", "down", configPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Suppress "not running" errors gracefully
@@ -196,7 +196,7 @@ func AddWGPeer(peerPubKey, clientIP string) error {
 		return nil
 	}
 
-	cmd := exec.Command("sudo", "wg", "set", "wg-zoop", "peer", peerPubKey, "allowed-ips", clientIP+"/32")
+	cmd := exec.Command("sudo", "-n", "wg", "set", "wg-zoop", "peer", peerPubKey, "allowed-ips", clientIP+"/32")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to add peer: %s (%v)", string(output), err)
@@ -211,7 +211,7 @@ func RemoveWGPeer(peerPubKey string) error {
 		return nil
 	}
 
-	cmd := exec.Command("sudo", "wg", "set", "wg-zoop", "peer", peerPubKey, "remove")
+	cmd := exec.Command("sudo", "-n", "wg", "set", "wg-zoop", "peer", peerPubKey, "remove")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to remove peer: %s (%v)", string(output), err)
@@ -233,7 +233,7 @@ func GetRealWGPeers() ([]ClientInfo, error) {
 	}
 	ifName := strings.TrimSuffix(filepath.Base(configPath), ".conf")
 
-	cmd := exec.Command("sudo", "wg", "show", ifName, "dump")
+	cmd := exec.Command("sudo", "-n", "wg", "show", ifName, "dump")
 	outputBytes, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, err

@@ -16,9 +16,14 @@ export default function Dashboard({
   wgLoading,
 }) {
   const isOnline = telemetry.sharingEnabled;
-  const [copiedId, setCopiedId]     = useState(false);
-  const [copiedField, setCopiedField] = useState(null);
-  const [wgExpanded, setWgExpanded]  = useState(true);
+  const [showWgModal, setShowWgModal] = useState(false);
+
+  // Automatically reopen modal when loading initiates
+  React.useEffect(() => {
+    if (wgLoading) {
+      setShowWgModal(true);
+    }
+  }, [wgLoading]);
 
   const handleCopyNodeId = () => {
     const id = config?.node?.id || 'node-alpha-7';
@@ -38,8 +43,12 @@ export default function Dashboard({
   const handleToggle = () => {
     const next = !isOnline;
     onToggleSharing(next);
-    if (next) toast.success('Node started — setting up WireGuard tunnel…');
-    else toast.warning('Node paused — sharing stopped');
+    if (next) {
+      setShowWgModal(true);
+      toast.success('Node started — configuring Zoop tunnel…');
+    } else {
+      toast.warning('Node paused — sharing stopped');
+    }
   };
 
   // Render a responsive SVG sparkline path
@@ -61,7 +70,7 @@ export default function Dashboard({
 
   const currentTotalSpeed = isOnline ? (telemetry.downloadSpeed + telemetry.uploadSpeed) : 0;
 
-  // ── WireGuard Config fields to display ─────────────────────────────────────
+  // ── Zoop Config fields to display ─────────────────────────────────────
   const wgFields = wgInfo ? [
     { key: 'Public Key',   value: wgInfo.publicKey,            icon: <Key size={14} />,    mono: true  },
     { key: 'Private Key',  value: wgInfo.privateKey,           icon: <Shield size={14} />, mono: true, sensitive: true },
@@ -79,97 +88,115 @@ export default function Dashboard({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
-      {/* ── WireGuard Loading Overlay ────────────────────────────────────────── */}
-      {wgLoading && (
-        <div className="wg-loading-banner">
-          <div className="wg-loading-spinner">
-            <Loader size={22} className="wg-spin" />
-          </div>
-          <div>
-            <div className="wg-loading-title">Setting up WireGuard tunnel…</div>
-            <div className="wg-loading-sub">Generating keys, writing config, bringing up interface.</div>
-          </div>
-        </div>
-      )}
+      {/* ── Zoop Connection Modal Popup Overlay ───────────────────────────────── */}
+      {showWgModal && (wgLoading || wgInfo) && (
+        <div className="wg-modal-overlay" onClick={() => !wgLoading && setShowWgModal(false)}>
+          <div className="wg-modal-content" onClick={(e) => e.stopPropagation()}>
+            
+            {/* Loading Modal State */}
+            {wgLoading && (
+              <div className="wg-loading-banner">
+                <div className="wg-loading-spinner">
+                  <Loader size={24} className="wg-spin" />
+                </div>
+                <div>
+                  <div className="wg-loading-title">Configuring Zoop Network…</div>
+                  <div className="wg-loading-sub">Generating keys, writing config, bringing up interface.</div>
+                </div>
+              </div>
+            )}
 
-      {/* ── WireGuard Config Card ────────────────────────────────────────────── */}
-      {wgInfo && !wgLoading && (
-        <div className={`wg-config-card ${wgInfo.active ? 'active' : 'error'}`}>
-          {/* Header */}
-          <div className="wg-config-header" onClick={() => setWgExpanded(v => !v)}>
-            <div className="wg-config-header-left">
-              <div className={`wg-status-dot ${wgInfo.active ? 'on' : 'off'}`} />
-              <span className="wg-config-title">
-                WireGuard Tunnel
-              </span>
-              {wgInfo.active
-                ? <span className="wg-badge active">Active</span>
-                : <span className="wg-badge error"><AlertTriangle size={11} /> Setup needed</span>
-              }
-            </div>
-            <button className="wg-expand-btn" type="button">
-              {wgExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-          </div>
+            {/* Loaded Config Profile State */}
+            {wgInfo && !wgLoading && (
+              <div className={`wg-config-card`}>
+                
+                {/* Modal Header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div className={`wg-status-dot ${wgInfo.active ? 'on' : 'off'}`} />
+                    <span style={{ fontSize: '16px', fontWeight: '600', color: 'var(--ink)' }}>
+                      Zoop Connection Profile
+                    </span>
+                    {wgInfo.active
+                      ? <span className="wg-badge active">Active</span>
+                      : <span className="wg-badge error"><AlertTriangle size={11} /> Setup needed</span>
+                    }
+                  </div>
+                </div>
 
-          {wgInfo.error && (
-            <div className="wg-error-notice">
-              <AlertTriangle size={13} />
-              <span>{wgInfo.error}</span>
-            </div>
-          )}
+                {wgInfo.error && (
+                  <div className="wg-error-notice" style={{ borderRadius: '8px', border: '1px solid rgba(255, 205, 26, 0.2)' }}>
+                    <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <span>{wgInfo.error}</span>
+                  </div>
+                )}
 
-          {wgExpanded && (
-            <div className="wg-config-body">
-              {/* Server fields */}
-              <div className="wg-section-label">Server Configuration</div>
-              <div className="wg-fields">
-                {wgFields.map(f => (
-                  <div className="wg-field-row" key={f.key}>
-                    <div className="wg-field-icon">{f.icon}</div>
-                    <div className="wg-field-label">{f.key}</div>
-                    <div className={`wg-field-value ${f.mono ? 'mono' : ''}`}>
-                      {f.sensitive
-                        ? <span className="wg-sensitive">••••••••••••••••••••••••••••••••••••••••••</span>
-                        : <span>{f.value}</span>
-                      }
-                    </div>
+                <div className="wg-config-body" style={{ padding: '4px 0 0' }}>
+                  {/* Server fields */}
+                  <div className="wg-section-label">Server Configuration</div>
+                  <div className="wg-fields">
+                    {wgFields.map(f => (
+                      <div className="wg-field-row" key={f.key}>
+                        <div className="wg-field-icon">{f.icon}</div>
+                        <div className="wg-field-label">{f.key}</div>
+                        <div className={`wg-field-value ${f.mono ? 'mono' : ''}`}>
+                          {f.sensitive
+                            ? <span className="wg-sensitive">••••••••••••••••••••••••••••••••••••••••••</span>
+                            : <span>{f.value}</span>
+                          }
+                        </div>
+                        <button
+                          type="button"
+                          className="wg-copy-btn"
+                          title={`Copy ${f.key}`}
+                          onClick={() => handleCopyField(f.key, f.value)}
+                        >
+                          {copiedField === f.key
+                            ? <Check size={13} color="var(--green)" />
+                            : <Copy size={13} />
+                          }
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Client peer block */}
+                  <div className="wg-section-label" style={{ marginTop: '20px' }}>
+                    Client Configuration Block
+                    <span className="wg-section-hint">— paste this into each connecting device's configuration</span>
+                  </div>
+                  <div className="wg-peer-block">
+                    <pre>{peerBlock}</pre>
                     <button
                       type="button"
-                      className="wg-copy-btn"
-                      title={`Copy ${f.key}`}
-                      onClick={() => handleCopyField(f.key, f.value)}
+                      className="wg-copy-btn wg-copy-block"
+                      title="Copy peer block"
+                      onClick={() => handleCopyField('Peer Block', peerBlock)}
                     >
-                      {copiedField === f.key
-                        ? <Check size={13} color="var(--green)" />
-                        : <Copy size={13} />
+                      {copiedField === 'Peer Block'
+                        ? <><Check size={13} color="var(--green)" /> Copied!</>
+                        : <><Copy size={13} /> Copy all</>
                       }
                     </button>
                   </div>
-                ))}
-              </div>
+                </div>
 
-              {/* Client peer block */}
-              <div className="wg-section-label" style={{ marginTop: '16px' }}>
-                Client Peer Block
-                <span className="wg-section-hint">— paste this into each connecting device's wg config</span>
+                {/* Close Button at bottom of modal */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                  <button 
+                    type="button" 
+                    className="btn btn-secondary" 
+                    onClick={() => setShowWgModal(false)}
+                    style={{ minWidth: '100px' }}
+                  >
+                    Done
+                  </button>
+                </div>
+
               </div>
-              <div className="wg-peer-block">
-                <pre>{peerBlock}</pre>
-                <button
-                  type="button"
-                  className="wg-copy-btn wg-copy-block"
-                  title="Copy peer block"
-                  onClick={() => handleCopyField('Peer Block', peerBlock)}
-                >
-                  {copiedField === 'Peer Block'
-                    ? <><Check size={13} color="var(--green)" /> Copied!</>
-                    : <><Copy size={13} /> Copy all</>
-                  }
-                </button>
-              </div>
-            </div>
-          )}
+            )}
+
+          </div>
         </div>
       )}
 
@@ -197,13 +224,13 @@ export default function Dashboard({
             <div className="node-status-msg">
               <h2>
                 {wgLoading
-                  ? 'Bringing up WireGuard…'
+                  ? 'Establishing Zoop Connection…'
                   : isOnline ? 'Your node is connected' : 'Your node is disconnected'
                 }
               </h2>
               <p>
                 {wgLoading
-                  ? 'Configuring keys and network interface. This takes a few seconds.'
+                  ? 'Configuring keys and interface. This takes a few seconds.'
                   : isOnline 
                     ? 'Your device is actively sharing network resources with the decentralized network.' 
                     : 'Hotspot disabled. everyday providers are offline.'
@@ -328,7 +355,7 @@ export default function Dashboard({
           
           <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '8px' }}>
             {wgLoading
-              ? 'WireGuard tunnel starting up…'
+              ? 'Zoop connection starting up…'
               : isOnline ? 'All systems operational' : 'Sharing is currently disabled by policy'
             }
           </div>
