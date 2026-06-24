@@ -17,7 +17,6 @@ frontend/dist-electron/
 Thumbs.db
 
 # Go dependencies
-go.sum
 vendor/
 
 # Installer binaries

@@ -38,6 +38,10 @@ jobs:
         run: |
           npm ci
 
+      - name: Create frontend dist directory
+        run: |
+          mkdir -p frontend/dist
+
       - name: Generate Wails module bindings
         run: |
           wails generate module
