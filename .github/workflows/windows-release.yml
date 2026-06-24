@@ -75,9 +75,9 @@ jobs:
 
       - name: Build NSIS installer
         working-directory: windows_installer
+        shell: bash
         run: |
-          makensis -DVERSION=${{ github.ref_name }} zoop_installer.nsi
-        shell: cmd
+          makensis -DVERSION="${{ github.ref_name }}" zoop_installer.nsi
 
       - name: Determine installer path
         id: installer

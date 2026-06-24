@@ -22,7 +22,7 @@ RequestExecutionLevel admin
 Section "Install"
   SetOutPath "$INSTDIR"
   ; Copy app files from staging folder
-  File /r "staging/*"
+  File "staging\\zoop-one.exe"
 
   ; Ensure AppData folder and write default config (with EULA accepted)
   SetOutPath "$APPDATA\\Zoop"
