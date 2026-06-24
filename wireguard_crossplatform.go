@@ -1,3 +1,6 @@
+//go:build !windows
+// +build !windows
+
 package main
 
 import (
@@ -9,6 +12,17 @@ import (
 	"strings"
 	"time"
 )
+
+func init() {
+	if runtime.GOOS == "windows" {
+		wireGuardInstallDir = findWireGuardDir()
+	}
+}
+
+// execCmd creates an exec.Cmd.
+func execCmd(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
 
 var wireGuardInstallDir string
 
@@ -80,9 +94,9 @@ func execWGSudo(args ...string) (string, error) {
 	}
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command(wgPath, args...)
+		cmd = execCmd(wgPath, args...)
 	} else {
-		cmd = exec.Command("sudo", append([]string{wgPath}, args...)...)
+		cmd = execCmd("sudo", append([]string{wgPath}, args...)...)
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -100,7 +114,7 @@ func execWGQuickSudo(action, configPath string) error {
 	if _, err := exec.LookPath("wg-quick"); err != nil {
 		return fmt.Errorf("wg-quick not found. Please install wireguard-tools")
 	}
-	cmd := exec.Command("sudo", "wg-quick", action, configPath)
+	cmd := execCmd("sudo", "wg-quick", action, configPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		errStr := strings.TrimSpace(string(output))
@@ -152,10 +166,10 @@ func windowsTunnelUp(wgExe, configPath, tunnelName string) error {
 
 	if windowsServiceExists(serviceName) {
 		windowsStopService(serviceName)
-		exec.Command(wgExe, "/uninstalltunnelservice", tunnelName).Run()
+		execCmd(wgExe, "/uninstalltunnelservice", tunnelName).Run()
 	}
 
-	out, err := exec.Command(wgExe, "/installtunnelservice", configPath).CombinedOutput()
+	out, err := execCmd(wgExe, "/installtunnelservice", configPath).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to install WireGuard tunnel service: %s (%w)",
 			strings.TrimSpace(string(out)), err)
@@ -175,7 +189,7 @@ func windowsTunnelDown(wgExe, tunnelName string) error {
 		windowsStopService(serviceName)
 	}
 
-	out, err := exec.Command(wgExe, "/uninstalltunnelservice", tunnelName).CombinedOutput()
+	out, err := execCmd(wgExe, "/uninstalltunnelservice", tunnelName).CombinedOutput()
 	if err != nil {
 		errStr := strings.TrimSpace(string(out))
 		if strings.Contains(errStr, "The specified service does not exist") ||
@@ -183,12 +197,12 @@ func windowsTunnelDown(wgExe, tunnelName string) error {
 			strings.Contains(errStr, "Could not find") {
 			return nil
 		}
-		exec.Command("sc", "delete", serviceName).Run()
+		execCmd("sc", "delete", serviceName).Run()
 		return fmt.Errorf("failed to uninstall WireGuard tunnel service: %s (%w)", errStr, err)
 	}
 
 	if err := windowsWaitForServiceGone(serviceName, 10); err != nil {
-		exec.Command("sc", "delete", serviceName).Run()
+		execCmd("sc", "delete", serviceName).Run()
 		return err
 	}
 
@@ -196,7 +210,7 @@ func windowsTunnelDown(wgExe, tunnelName string) error {
 }
 
 func windowsServiceExists(name string) bool {
-	out, err := exec.Command("sc", "query", name).CombinedOutput()
+	out, err := execCmd("sc", "query", name).CombinedOutput()
 	if err != nil {
 		return false
 	}
@@ -204,7 +218,7 @@ func windowsServiceExists(name string) bool {
 }
 
 func windowsServiceState(name string) string {
-	out, err := exec.Command("sc", "query", name).CombinedOutput()
+	out, err := execCmd("sc", "query", name).CombinedOutput()
 	if err != nil {
 		return ""
 	}
@@ -221,8 +235,8 @@ func windowsServiceState(name string) string {
 }
 
 func windowsStopService(name string) {
-	exec.Command("net", "stop", name).Run()
-	exec.Command("sc", "stop", name).Run()
+	execCmd("net", "stop", name).Run()
+	execCmd("sc", "stop", name).Run()
 	windowsWaitForServiceState(name, "STOPPED", 10)
 }
 
@@ -233,7 +247,7 @@ func windowsWaitForServiceRunning(name string, timeoutSec int) error {
 		case "RUNNING":
 			return nil
 		case "STOPPED":
-			exec.Command("net", "start", name).Run()
+			execCmd("net", "start", name).Run()
 		case "":
 			time.Sleep(500 * time.Millisecond)
 			continue
@@ -298,7 +312,7 @@ func (m *UnixWireGuardManager) InstallDependencies() error {
 			return nil
 		}
 		if _, err := exec.LookPath("brew"); err == nil {
-			cmd := exec.Command("brew", "install", "wireguard-tools")
+			cmd := execCmd("brew", "install", "wireguard-tools")
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("failed to install wireguard-tools via brew: %s (%v)", string(output), err)

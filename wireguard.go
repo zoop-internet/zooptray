@@ -109,6 +109,7 @@ func CreateClientWGConfig(privateKey, peerPubKey, peerEndpoint string) error {
 PrivateKey = %s
 Address = 10.200.0.2/32
 DNS = 1.1.1.1
+ListenPort = 51820
 
 [Peer]
 PublicKey = %s
@@ -390,7 +391,7 @@ func GetDefaultRouteInterface() string {
 		}
 	case "windows":
 		// Windows: use PowerShell to get the default route interface name
-		cmd := exec.Command("powershell", "-c", "Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -ExpandProperty InterfaceAlias")
+		cmd := execCmd("powershell", "-c", "Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -ExpandProperty InterfaceAlias")
 		output, err := cmd.Output()
 		if err == nil {
 			if name := strings.TrimSpace(string(output)); name != "" && !strings.Contains(name, "Get-NetRoute") {
@@ -398,7 +399,7 @@ func GetDefaultRouteInterface() string {
 			}
 		}
 		// Fallback: parse 'netsh interface ipv4 show interfaces' for any connected interface
-		cmd = exec.Command("netsh", "interface", "ipv4", "show", "interfaces")
+		cmd = execCmd("netsh", "interface", "ipv4", "show", "interfaces")
 		output, err = cmd.Output()
 		if err == nil {
 			lines := strings.Split(string(output), "\n")

@@ -567,7 +567,9 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 
 	peers, err := n.DiscoverPeers()
 	if err != nil {
-		return fmt.Errorf("failed to discover peers: %w", err)
+		err = fmt.Errorf("failed to discover peers: %w", err)
+		n.addLog("error", err.Error())
+		return err
 	}
 
 	var peer *DiscoveryPeer
@@ -578,24 +580,35 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 		}
 	}
 	if peer == nil {
-		return fmt.Errorf("peer %q not found", nodeID)
+		err := fmt.Errorf("peer %q not found in discovery", nodeID)
+		n.addLog("error", err.Error())
+		return err
 	}
 
 	privKey, pubKey, err := GenerateWGKeypair()
 	if err != nil {
-		return fmt.Errorf("failed to generate client keypair: %w", err)
+		err = fmt.Errorf("failed to generate client keypair: %w", err)
+		n.addLog("error", err.Error())
+		return err
 	}
 	n.addLog("info", fmt.Sprintf("Generated client keypair (public: %s)", pubKey))
 
 	if err := CreateClientWGConfig(privKey, peer.PublicKey, peer.Endpoint); err != nil {
-		return fmt.Errorf("failed to create client WireGuard config: %w", err)
+		err = fmt.Errorf("failed to create client WireGuard config: %w", err)
+		n.addLog("error", err.Error())
+		return err
 	}
 
 	configPath, _ := GetClientWGConfigPath()
-	n.wgManager.StopTunnel(configPath)
+	n.addLog("info", fmt.Sprintf("Stopping any existing tunnel before connecting to peer..."))
+	if stopErr := n.wgManager.StopTunnel(configPath); stopErr != nil {
+		n.addLog("info", fmt.Sprintf("Tunnel stop before connect: %v", stopErr))
+	}
 
 	if err := n.wgManager.StartTunnel(configPath); err != nil {
-		return fmt.Errorf("failed to start client tunnel to peer: %w", err)
+		err = fmt.Errorf("failed to start client tunnel: %w", err)
+		n.addLog("error", err.Error())
+		return err
 	}
 
 	n.mu.Lock()
@@ -1012,17 +1025,17 @@ X-GNOME-Autostart-enabled=true
 	case "windows":
 		if !enabled {
 			// Check if the value exists before deleting
-			check := exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One")
+			check := execCmd("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One")
 			if err := check.Run(); err != nil {
 				return nil
 			}
-			output, err := exec.Command("reg", "delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One", "/f").CombinedOutput()
+			output, err := execCmd("reg", "delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One", "/f").CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("failed to update Windows registry autostart: %s (%w)", strings.TrimSpace(string(output)), err)
 			}
 			return nil
 		}
-		output, err := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One", "/t", "REG_SZ", "/d", execPath, "/f").CombinedOutput()
+		output, err := execCmd("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One", "/t", "REG_SZ", "/d", execPath, "/f").CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("failed to update Windows registry autostart: %s (%w)", strings.TrimSpace(string(output)), err)
 		}
