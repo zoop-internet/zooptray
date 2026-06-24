@@ -61,6 +61,53 @@ jobs:
           cp build/bin/zoop-one release/zoop-one
           tar czf release/zoop-one-linux-${{ github.ref_name }}.tar.gz -C release zoop-one
 
+      - name: Build .deb package
+        run: |
+          PKG_NAME="zoop-one"
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          DEB_DIR="release/deb/${PKG_NAME}_${VERSION}_amd64"
+
+          mkdir -p "${DEB_DIR}/DEBIAN"
+          mkdir -p "${DEB_DIR}/usr/bin"
+          mkdir -p "${DEB_DIR}/usr/share/applications"
+          mkdir -p "${DEB_DIR}/usr/share/icons/hicolor/256x256/apps"
+          mkdir -p "${DEB_DIR}/usr/share/doc/${PKG_NAME}"
+
+          install -m 755 build/bin/zoop-one "${DEB_DIR}/usr/bin/zoop-one"
+
+          cat > "${DEB_DIR}/DEBIAN/control" << CONTROLEOF
+Package: zoop-one
+Version: ${VERSION}
+Architecture: amd64
+Maintainer: Zoop Network <contact@zoopnetwork.com>
+Description: Zoop One — Community-powered desktop node
+ Run a lightweight system-tray node that manages sharing,
+ peer connections, local controls, and provider network operations.
+Depends: libgtk-3-0 (>= 3.24), libwebkit2gtk-4.1-0 (>= 2.40)
+CONTROLEOF
+
+          cat > "${DEB_DIR}/usr/share/applications/zoop-one.desktop" << DESKTOPSOF
+[Desktop Entry]
+Name=Zoop One
+Comment=Community-powered desktop node
+Exec=/usr/bin/zoop-one
+Terminal=false
+Type=Application
+Categories=Network;Utility;
+Icon=zoop-one
+DESKTOPSOF
+
+          cp build/appicon.png "${DEB_DIR}/usr/share/icons/hicolor/256x256/apps/zoop-one.png"
+
+          cat > "${DEB_DIR}/DEBIAN/copyright" << COPYEOF
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Zoop One
+Source: https://github.com/Zoop-Network/zooptray
+COPYEOF
+
+          dpkg-deb --root-owner-group --build "${DEB_DIR}" "release/zoop-one_${VERSION}_amd64.deb"
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
@@ -73,6 +120,12 @@ jobs:
           name: zoop-one-linux-archive
           path: release/zoop-one-linux-${{ github.ref_name }}.tar.gz
 
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoop-one-linux-deb
+          path: release/zoop-one_*.deb
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
@@ -82,5 +135,6 @@ jobs:
           files: |
             release/zoop-one-linux-${{ github.ref_name }}.tar.gz
             release/zoop-one
+            release/zoop-one_*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
