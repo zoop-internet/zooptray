@@ -1,6 +1,3 @@
-//go:build !windows
-// +build !windows
-
 package main
 
 import (
@@ -17,11 +14,6 @@ func init() {
 	if runtime.GOOS == "windows" {
 		wireGuardInstallDir = findWireGuardDir()
 	}
-}
-
-// execCmd creates an exec.Cmd.
-func execCmd(name string, args ...string) *exec.Cmd {
-	return exec.Command(name, args...)
 }
 
 var wireGuardInstallDir string
