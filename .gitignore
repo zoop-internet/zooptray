@@ -25,3 +25,6 @@ windows_installer/*.zip
 windows_installer/staging/
 linux_installer/*.tar.gz
 linux_installer/zoop-one
+
+# Wrangler CLI cache
+.wrangler/
