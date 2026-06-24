@@ -35,7 +35,7 @@ jobs:
 
       - name: Create frontend dist directory
         run: |
-          mkdir -p frontend/dist
+          mkdir -p frontend/dist && touch frontend/dist/.gitkeep
 
       - name: Generate Wails module bindings
         run: |
