@@ -89,6 +89,18 @@ func TestCreateWGConfigCreatesDirectory(t *testing.T) {
 	}
 }
 
+type fakeWireGuardManager struct{}
+
+func (f *fakeWireGuardManager) InstallDependencies() error          { return nil }
+func (f *fakeWireGuardManager) StartTunnel(configPath string) error { return nil }
+func (f *fakeWireGuardManager) StopTunnel(configPath string) error  { return nil }
+func (f *fakeWireGuardManager) AddPeer(interfaceName, peerPubKey, allowedIPs string) error {
+	return nil
+}
+func (f *fakeWireGuardManager) RemovePeer(interfaceName, peerPubKey string) error { return nil }
+func (f *fakeWireGuardManager) GetPeers(interfaceName string) (string, error)     { return "", nil }
+func (f *fakeWireGuardManager) GetInterfaceName() (string, error)                 { return "wg-zoop", nil }
+
 func TestParseWGDump(t *testing.T) {
 	output := strings.Join([]string{
 		"wg-zoop\tserver-private\tserver-public\t51820\toff",
@@ -114,5 +126,90 @@ func TestParseWGDump(t *testing.T) {
 	}
 	if peer.Speed != 0 {
 		t.Fatalf("initial parsed speed = %f, want 0", peer.Speed)
+	}
+}
+
+func TestToggleSharingDisablesState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	service := NewNodeServiceWithManager(&fakeWireGuardManager{})
+	service.sharingState = true
+	service.telemetry = Telemetry{SharingEnabled: true, TunnelActive: true}
+	service.cfg.Sharing.Enabled = true
+
+	result := service.ToggleSharing(false)
+	if result != false {
+		t.Fatalf("ToggleSharing(false) = %v, want false", result)
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.sharingState {
+		t.Fatalf("sharingState = %v, want false", service.sharingState)
+	}
+	if service.cfg.Sharing.Enabled {
+		t.Fatalf("cfg.Sharing.Enabled = %v, want false", service.cfg.Sharing.Enabled)
+	}
+	if service.telemetry.TunnelActive {
+		t.Fatalf("telemetry.TunnelActive = %v, want false", service.telemetry.TunnelActive)
+	}
+}
+
+func TestConfigValidation(t *testing.T) {
+	cfg := &Config{
+		Node: NodeConfig{
+			ID:             "node-1",
+			DisplayName:    "Test Node",
+			PrivateKeyPath: "/tmp/test.key",
+			IsPublic:       true,
+		},
+		Sharing: SharingConfig{
+			Enabled:             true,
+			MaxClients:          0,
+			BandwidthCapPercent: 105,
+			RoutingPolicy:       "",
+		},
+		System: SystemConfig{
+			AutoStartOnBoot:    false,
+			PreferredInterface: "eth0",
+		},
+		API: ApiConfig{
+			Endpoint:                 "https://api.zoopnetwork.test/v1",
+			HeartbeatIntervalSeconds: 2,
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid config, got nil")
+	}
+}
+
+func TestSaveConfigAndLoadConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := GetDefaultConfig()
+	cfg.Node.DisplayName = "Saved Node"
+	cfg.Sharing.MaxClients = 25
+	cfg.API.HeartbeatIntervalSeconds = 30
+
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if loaded.Node.DisplayName != cfg.Node.DisplayName {
+		t.Fatalf("loaded display name = %q, want %q", loaded.Node.DisplayName, cfg.Node.DisplayName)
+	}
+	if loaded.Sharing.MaxClients != cfg.Sharing.MaxClients {
+		t.Fatalf("loaded max clients = %d, want %d", loaded.Sharing.MaxClients, cfg.Sharing.MaxClients)
+	}
+	if loaded.API.HeartbeatIntervalSeconds != cfg.API.HeartbeatIntervalSeconds {
+		t.Fatalf("loaded heartbeat interval = %d, want %d", loaded.API.HeartbeatIntervalSeconds, cfg.API.HeartbeatIntervalSeconds)
 	}
 }

@@ -14,6 +14,8 @@ export default function Settings({ config, interfaces, onSaveConfig }) {
   const [heartbeatInterval, setHeartbeat]       = useState(15);
   const [saving, setSaving]                     = useState(false);
 
+  const isConfigLoaded = Boolean(config);
+
   const routingOptions = [
     { label: 'Balanced',     value: 'balanced'     },
     { label: 'Performance',  value: 'performance'  },
@@ -46,6 +48,10 @@ export default function Settings({ config, interfaces, onSaveConfig }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!isConfigLoaded) {
+      toast.error('Configuration is still loading. Please try again shortly.');
+      return;
+    }
     setSaving(true);
 
     const updatedConfig = {
@@ -80,6 +86,14 @@ export default function Settings({ config, interfaces, onSaveConfig }) {
       setSaving(false);
     }
   };
+
+  if (!isConfigLoaded) {
+    return (
+      <div className="settings-loading" style={{ padding: '24px', color: 'var(--muted)', fontSize: '15px' }}>
+        Loading settings…
+      </div>
+    );
+  }
 
   return (
     <form className="settings-layout" onSubmit={handleSubmit}>
@@ -215,7 +229,7 @@ export default function Settings({ config, interfaces, onSaveConfig }) {
         <span style={{ fontSize: '13px', color: 'var(--muted-dark)' }}>
           Changes take effect immediately after saving.
         </span>
-        <button type="submit" className="btn btn-primary" disabled={saving} style={{ minWidth: '140px' }}>
+        <button type="submit" className="btn btn-primary" disabled={saving || !isConfigLoaded} style={{ minWidth: '140px' }}>
           <Save size={15} />
           <span>{saving ? 'Saving…' : 'Save Settings'}</span>
         </button>

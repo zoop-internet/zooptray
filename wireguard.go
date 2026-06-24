@@ -55,6 +55,11 @@ func DerivePublicKey(privBase64 string) (string, error) {
 	return base64.StdEncoding.EncodeToString(pubArr[:]), nil
 }
 
+const (
+	defaultWGAddress = "10.200.0.1/24"
+	defaultWGNetwork = "10.200.0.0/24"
+)
+
 // GetWGConfigPath returns the path to the temporary wireguard configuration file
 func GetWGConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -87,6 +92,9 @@ func CreateWGConfig(privateKey, preferredInterface string) error {
 	}
 	if _, err := net.InterfaceByName(preferredInterface); err != nil {
 		return fmt.Errorf("preferred network interface %q is not available: %w", preferredInterface, err)
+	}
+	if err := ensureSubnetAvailable(defaultWGNetwork); err != nil {
+		return err
 	}
 
 	// Generate platform-specific WireGuard configuration
@@ -138,6 +146,41 @@ Address = 10.200.0.1/24
 }
 
 // InstallWGDependenciesIfNeeded checks for wireguard-tools and installs them using PolicyKit (pkexec) if missing
+func ensureSubnetAvailable(subnet string) error {
+	_, desiredNet, err := net.ParseCIDR(subnet)
+	if err != nil {
+		return fmt.Errorf("invalid WireGuard subnet %q: %w", subnet, err)
+	}
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return fmt.Errorf("failed to enumerate interfaces for subnet validation: %w", err)
+	}
+
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ipNet *net.IPNet
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ipNet = v
+			case *net.IPAddr:
+				ipNet = &net.IPNet{IP: v.IP, Mask: v.IP.DefaultMask()}
+			}
+			if ipNet == nil {
+				continue
+			}
+			if desiredNet.Contains(ipNet.IP) {
+				return fmt.Errorf("wireguard subnet %s conflicts with existing network address %s on interface %s", subnet, ipNet.String(), iface.Name)
+			}
+		}
+	}
+	return nil
+}
+
 func InstallWGDependenciesIfNeeded() error {
 	if runtime.GOOS != "linux" {
 		return nil
@@ -179,44 +222,83 @@ func InstallWGDependenciesIfNeeded() error {
 	return nil
 }
 
+func executeWGQuick(action, configPath string) error {
+	if action != "up" && action != "down" {
+		return fmt.Errorf("invalid wg-quick action: %s", action)
+	}
+
+	if _, err := exec.LookPath("wg-quick"); err != nil {
+		return fmt.Errorf("wg-quick not found. Please install wireguard-tools")
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("wg-quick", action, configPath)
+	} else {
+		cmd = exec.Command("sudo", "wg-quick", action, configPath)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		errMsg := strings.TrimSpace(string(output))
+		if action == "down" && (strings.Contains(errMsg, "is not a WireGuard interface") || strings.Contains(errMsg, "does not exist")) {
+			return nil
+		}
+		return fmt.Errorf("wg-quick %s failed: %s (%w)", action, errMsg, err)
+	}
+	return nil
+}
+
 // StartWGTunnel calls wg-quick to start the WireGuard interface
 func StartWGTunnel() error {
-	manager := GetWireGuardManager()
 	configPath, err := GetWGConfigPath()
 	if err != nil {
 		return err
 	}
-	return manager.StartTunnel(configPath)
+	return executeWGQuick("up", configPath)
 }
 
 // StopWGTunnel calls wg-quick to stop the WireGuard interface
 func StopWGTunnel() error {
-	manager := GetWireGuardManager()
 	configPath, err := GetWGConfigPath()
 	if err != nil {
 		return err
 	}
-	return manager.StopTunnel(configPath)
+	return executeWGQuick("down", configPath)
 }
 
 // AddWGPeer registers a client peer on the WireGuard interface
 func AddWGPeer(peerPubKey, clientIP string) error {
-	manager := GetWireGuardManager()
 	ifName, err := GetWGInterfaceName()
 	if err != nil {
 		return err
 	}
-	return manager.AddPeer(ifName, peerPubKey, clientIP+"/32")
+	if _, err := exec.LookPath("wg"); err != nil {
+		return fmt.Errorf("wg command not found. Please install wireguard-tools")
+	}
+	cmd := exec.Command("sudo", "wg", "set", ifName, "peer", peerPubKey, "allowed-ips", clientIP+"/32")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to add peer: %s (%w)", strings.TrimSpace(string(output)), err)
+	}
+	return nil
 }
 
 // RemoveWGPeer deletes a client peer from the WireGuard interface
 func RemoveWGPeer(peerPubKey string) error {
-	manager := GetWireGuardManager()
 	ifName, err := GetWGInterfaceName()
 	if err != nil {
 		return err
 	}
-	return manager.RemovePeer(ifName, peerPubKey)
+	if _, err := exec.LookPath("wg"); err != nil {
+		return fmt.Errorf("wg command not found. Please install wireguard-tools")
+	}
+	cmd := exec.Command("sudo", "wg", "set", ifName, "peer", peerPubKey, "remove")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to remove peer: %s (%w)", strings.TrimSpace(string(output)), err)
+	}
+	return nil
 }
 
 // GetRealWGPeers runs wg show wg-zoop dump to return a slice of ClientInfo representing real WireGuard peers
@@ -248,7 +330,6 @@ func ParseWGDump(output string) []ClientInfo {
 		parts := strings.Split(line, "\t")
 		// wg show dump format:
 		// interface public-key preshared-key endpoint allowed-ips latest-handshake rx-bytes tx-bytes persistent-keepalive
-		// Usually contains 9 columns. The first line is the interface private-key details, which has 5 columns.
 		if len(parts) < 9 {
 			continue // skip the interface info line
 		}
@@ -261,33 +342,31 @@ func ParseWGDump(output string) []ClientInfo {
 
 		handshake, _ := strconv.ParseInt(handshakeStr, 10, 64)
 		if handshake == 0 {
-			// Peer has never completed a handshake; skip in active view
 			continue
 		}
 
 		rxBytes, _ := strconv.ParseFloat(rxBytesStr, 64)
 		txBytes, _ := strconv.ParseFloat(txBytesStr, 64)
 
-		// Convert bytes to Megabytes
 		dataSharedMB := (rxBytes + txBytes) / (1024.0 * 1024.0)
 
-		// Create readable display name using beginning of public key
 		shortKey := pubKey
 		if len(shortKey) > 12 {
 			shortKey = shortKey[:8] + "..." + shortKey[len(shortKey)-4:]
 		}
 		name := fmt.Sprintf("Client (%s)", shortKey)
 
-		// Format connection time
 		connectedAt := time.Unix(handshake, 0).Format("15:04:05")
 
 		peers = append(peers, ClientInfo{
 			IP:          allowedIPs,
-			MAC:         pubKey, // Use public key as the unique MAC representation in UI
+			MAC:         pubKey,
 			Name:        name,
 			ConnectedAt: connectedAt,
-			Speed:       0.0, // Speed metric parsed/approximated or dynamic
+			Speed:       0.0,
 			DataShared:  dataSharedMB,
+			RxBytes:     rxBytes,
+			TxBytes:     txBytes,
 		})
 	}
 

@@ -12,7 +12,7 @@ import Devices    from './components/Devices';
 import Earnings   from './components/Earnings';
 import Settings   from './components/Settings';
 import About      from './components/About';
-import ToastContainer from './components/Toast';
+import ToastContainer, { toast } from './components/Toast';
 
 export default function App() {
   // Persist theme via localStorage so it survives app restarts
@@ -71,13 +71,25 @@ export default function App() {
     GetConfig().then(cfg => {
       setConfig(cfg);
       setTelemetry(prev => ({ ...prev, sharingEnabled: cfg.sharing.enabled }));
-    }).catch(console.error);
+    }).catch(err => {
+      console.error(err);
+      toast.error('Unable to load configuration');
+    });
 
-    GetInterfaces().then(setInterfaces).catch(console.error);
-    GetLogs().then(l => setLogs(l || [])).catch(console.error);
+    GetInterfaces().then(setInterfaces).catch(err => {
+      console.error(err);
+      toast.warning('Unable to detect network interfaces');
+    });
+    GetLogs().then(l => setLogs(l || [])).catch(err => {
+      console.error(err);
+      toast.warning('Unable to load logs');
+    });
     GetTunnelStatus().then(status => {
       if (status) setTelemetry(prev => ({ ...prev, ...status }));
-    }).catch(console.error);
+    }).catch(err => {
+      console.error(err);
+      toast.warning('Unable to get tunnel status');
+    });
   }, []);
 
   // Real-time Wails events
@@ -101,6 +113,7 @@ export default function App() {
     runtime.EventsOn('wg_tunnel_error', (info) => {
       setWgLoading(false);
       setWgInfo(info);
+      toast.error(info?.error || 'WireGuard tunnel failed to start');
     });
     runtime.EventsOn('wg_tunnel_stopped', () => {
       setWgLoading(false);
@@ -119,30 +132,54 @@ export default function App() {
 
   const handleToggleSharing = (nextState) => {
     if (nextState) {
-      // Show loading overlay while WireGuard sets up
       setWgLoading(true);
       setWgInfo(null);
     } else {
       setWgInfo(null);
       setWgLoading(false);
     }
-    ToggleSharing(nextState).then(result => {
-      if (!nextState) {
-        setTelemetry(prev => ({ ...prev, sharingEnabled: result, tunnelActive: result }));
-      }
-    });
+
+    ToggleSharing(nextState)
+      .then(result => {
+        if (!nextState) {
+          setTelemetry(prev => ({ ...prev, sharingEnabled: result, tunnelActive: result }));
+          toast.info('Sharing disabled successfully.');
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        setWgLoading(false);
+        toast.error('Unable to change sharing state.');
+      });
   };
 
   const handleDisconnectClient = (mac) => {
-    DisconnectClient(mac).then(success => {
-      if (success) setClients(prev => prev.filter(c => c.mac !== mac));
-    });
+    DisconnectClient(mac)
+      .then(success => {
+        if (success) {
+          setClients(prev => prev.filter(c => c.mac !== mac));
+          toast.success('Client disconnected successfully.');
+        } else {
+          toast.warning('Client was not found or already disconnected.');
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        toast.error('Failed to disconnect client.');
+      });
   };
 
   const handleSaveConfig = (updatedConfig) => {
-    return SaveConfig(updatedConfig).then(() => {
-      setConfig(updatedConfig);
-    });
+    return SaveConfig(updatedConfig)
+      .then(() => {
+        setConfig(updatedConfig);
+        toast.success('Settings saved successfully');
+      })
+      .catch(err => {
+        console.error(err);
+        toast.error(err?.message || 'Failed to save settings');
+        throw err;
+      });
   };
 
   const screenDetails = {

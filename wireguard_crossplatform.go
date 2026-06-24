@@ -42,16 +42,26 @@ func (m *LinuxWireGuardManager) RemovePeer(interfaceName, peerPubKey string) err
 }
 
 func (m *LinuxWireGuardManager) GetPeers(interfaceName string) (string, error) {
-	peers, err := GetRealWGPeers()
+	if interfaceName == "" {
+		var err error
+		interfaceName, err = GetWGInterfaceName()
+		if err != nil {
+			return "", err
+		}
+	}
+	if interfaceName == "" {
+		return "", fmt.Errorf("wireguard interface name is required")
+	}
+	if _, err := exec.LookPath("wg"); err != nil {
+		return "", fmt.Errorf("wg command not found. Please install wireguard-tools")
+	}
+
+	cmd := exec.Command("sudo", "wg", "show", interfaceName, "dump")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get peers: %s (%w)", strings.TrimSpace(string(output)), err)
 	}
-	// Convert peers to string representation
-	var result strings.Builder
-	for _, peer := range peers {
-		result.WriteString(fmt.Sprintf("%s\t%s\t%s\n", peer.Name, peer.MAC, peer.IP))
-	}
-	return result.String(), nil
+	return string(output), nil
 }
 
 func (m *LinuxWireGuardManager) GetInterfaceName() (string, error) {

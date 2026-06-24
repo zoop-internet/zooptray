@@ -6,6 +6,7 @@ import (
 	"context"
 	_ "embed"
 	"os"
+	"time"
 
 	"fyne.io/systray"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -17,6 +18,7 @@ var zoopIcon []byte
 type ActiveTrayManager struct {
 	ctx         context.Context
 	nodeService *NodeService
+	mToggle     *systray.MenuItem
 }
 
 func NewTrayManager() TrayManager {
@@ -29,6 +31,26 @@ func (t *ActiveTrayManager) SetupTray(ctx context.Context, nodeService *NodeServ
 
 	go func() {
 		systray.Run(t.onReady, t.onExit)
+	}()
+
+	// Start a small monitor to keep the tray toggle in sync with backend state.
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if t.mToggle == nil || t.nodeService == nil {
+				continue
+			}
+			t.nodeService.mu.Lock()
+			state := t.nodeService.sharingState
+			t.nodeService.mu.Unlock()
+			// Update menu check state on main systray goroutine
+			if state {
+				t.mToggle.Check()
+			} else {
+				t.mToggle.Uncheck()
+			}
+		}
 	}()
 }
 
@@ -43,6 +65,8 @@ func (t *ActiveTrayManager) onReady() {
 
 	mShow := systray.AddMenuItem("Show Dashboard", "Restore Zoop One Window")
 	mToggle := systray.AddMenuItem("Toggle Sharing", "Start/Stop network sharing")
+	// keep a reference for background sync
+	t.mToggle = mToggle
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Exit Application")
 

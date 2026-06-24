@@ -16,13 +16,13 @@ import (
 )
 
 type Telemetry struct {
-	UploadSpeed        float64 `json:"uploadSpeed"`        // Mbps
-	DownloadSpeed      float64 `json:"downloadSpeed"`      // Mbps
+	UploadSpeed        float64 `json:"uploadSpeed"`   // Mbps
+	DownloadSpeed      float64 `json:"downloadSpeed"` // Mbps
 	ActiveClientsCount int     `json:"activeClientsCount"`
-	TotalDataShared    float64 `json:"totalDataShared"`    // GB
+	TotalDataShared    float64 `json:"totalDataShared"` // GB
 	SharingEnabled     bool    `json:"sharingEnabled"`
-	TunnelActive        bool    `json:"tunnelActive"`
-	TunnelError         string  `json:"tunnelError"`
+	TunnelActive       bool    `json:"tunnelActive"`
+	TunnelError        string  `json:"tunnelError"`
 	StartedAt          string  `json:"startedAt"`
 	PublicIP           string  `json:"publicIP"`
 }
@@ -34,6 +34,8 @@ type ClientInfo struct {
 	ConnectedAt string  `json:"connectedAt"`
 	Speed       float64 `json:"speed"`      // Mbps
 	DataShared  float64 `json:"dataShared"` // MB
+	RxBytes     float64 `json:"-"`
+	TxBytes     float64 `json:"-"`
 }
 
 type LogMessage struct {
@@ -44,14 +46,14 @@ type LogMessage struct {
 
 // WGInfo holds the readable WireGuard configuration sent to the frontend
 type WGInfo struct {
-	PublicKey   string `json:"publicKey"`
-	PrivateKey  string `json:"privateKey"`
-	ListenPort  int    `json:"listenPort"`
-	Address     string `json:"address"`
-	Interface   string `json:"wgInterface"`
-	ConfigPath  string `json:"configPath"`
-	Active      bool   `json:"active"`
-	Error       string `json:"error"`
+	PublicKey  string `json:"publicKey"`
+	PrivateKey string `json:"privateKey"`
+	ListenPort int    `json:"listenPort"`
+	Address    string `json:"address"`
+	Interface  string `json:"wgInterface"`
+	ConfigPath string `json:"configPath"`
+	Active     bool   `json:"active"`
+	Error      string `json:"error"`
 }
 
 type NodeService struct {
@@ -68,6 +70,13 @@ type NodeService struct {
 }
 
 func NewNodeService() *NodeService {
+	return NewNodeServiceWithManager(nil)
+}
+
+func NewNodeServiceWithManager(manager WireGuardManager) *NodeService {
+	if manager == nil {
+		manager = GetWireGuardManager()
+	}
 	cfg, _ := LoadConfig()
 
 	service := &NodeService{
@@ -76,7 +85,7 @@ func NewNodeService() *NodeService {
 		stopChan:     make(chan struct{}),
 		logs:         make([]LogMessage, 0),
 		clients:      make([]ClientInfo, 0),
-		wgManager:    GetWireGuardManager(),
+		wgManager:    manager,
 	}
 
 	// Add initial logs
@@ -167,7 +176,7 @@ func (n *NodeService) runTelemetryLoop() {
 	defer ticker.Stop()
 
 	// Track last peer data transfer to compute speeds dynamically
-	lastPeerData := make(map[string]float64)
+	lastPeerData := make(map[string][2]float64)
 
 	for {
 		select {
@@ -191,27 +200,30 @@ func (n *NodeService) runTelemetryLoop() {
 					deactivateTunnel = true
 					nextTelemetry = Telemetry{
 						SharingEnabled: false,
-						TunnelActive:    false,
-						TunnelError:     err.Error(),
-						PublicIP:        publicIP,
+						TunnelActive:   false,
+						TunnelError:    err.Error(),
+						PublicIP:       publicIP,
 					}
-					lastPeerData = make(map[string]float64)
+					lastPeerData = make(map[string][2]float64)
 				} else {
 					realPeers := ParseWGDump(peersOutput)
 					var totalUp, totalDown, totalDataMB float64
 					for i, rp := range realPeers {
-						oldData, exists := lastPeerData[rp.MAC]
-						if exists {
-							delta := rp.DataShared - oldData
-							if delta < 0 {
-								delta = 0
-							}
-							realPeers[i].Speed = delta * 4.0
+						oldData := lastPeerData[rp.MAC]
+						deltaRx := rp.RxBytes - oldData[0]
+						deltaTx := rp.TxBytes - oldData[1]
+						if deltaRx < 0 {
+							deltaRx = 0
 						}
-						lastPeerData[rp.MAC] = rp.DataShared
-						totalDown += realPeers[i].Speed
-						totalUp += realPeers[i].Speed * 0.15
-						totalDataMB += realPeers[i].DataShared
+						if deltaTx < 0 {
+							deltaTx = 0
+						}
+						lastPeerData[rp.MAC] = [2]float64{rp.RxBytes, rp.TxBytes}
+						speedMbps := (deltaRx + deltaTx) * 8.0 / (1024.0 * 1024.0) / 2.0
+						realPeers[i].Speed = speedMbps
+						totalDown += deltaRx * 8.0 / (1024.0 * 1024.0) / 2.0
+						totalUp += deltaTx * 8.0 / (1024.0 * 1024.0) / 2.0
+						totalDataMB += rp.DataShared
 					}
 					nextClients = realPeers
 					nextTelemetry = Telemetry{
@@ -220,8 +232,8 @@ func (n *NodeService) runTelemetryLoop() {
 						ActiveClientsCount: len(realPeers),
 						TotalDataShared:    totalDataMB / 1024.0,
 						SharingEnabled:     true,
-						TunnelActive:        true,
-						TunnelError:         tunnelError,
+						TunnelActive:       true,
+						TunnelError:        tunnelError,
 						PublicIP:           publicIP,
 					}
 					if !startedAt.IsZero() {
@@ -229,7 +241,7 @@ func (n *NodeService) runTelemetryLoop() {
 					}
 				}
 			} else {
-				lastPeerData = make(map[string]float64)
+				lastPeerData = make(map[string][2]float64)
 				nextTelemetry = Telemetry{
 					TunnelError: tunnelError,
 					PublicIP:    publicIP,
@@ -250,9 +262,7 @@ func (n *NodeService) runTelemetryLoop() {
 			n.mu.Unlock()
 
 			if deactivateTunnel {
-				go func() {
-					_ = SaveConfig(cfg)
-				}()
+				go n.saveConfigBackground(cfg)
 			}
 			if n.ctx != nil {
 				wailsRuntime.EventsEmit(n.ctx, "telemetry_updated", currentTelemetry)
@@ -266,27 +276,46 @@ func (n *NodeService) runTelemetryLoop() {
 func (n *NodeService) GetConfig() *Config {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.cfg
+	return CopyConfig(n.cfg)
 }
 
 // SaveConfig updates the local config manifest and writes it to file
 func (n *NodeService) SaveConfig(cfg *Config) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	// Update local struct
-	n.cfg = cfg
-
-	// Sync autostart settings with OS
-	if err := updateAutostart(cfg.System.AutoStartOnBoot); err != nil {
-		n.addLogLocked("error", fmt.Sprintf("Failed to update autostart setting: %v", err))
+	if cfg == nil {
+		return fmt.Errorf("config cannot be nil")
 	}
 
-	// Trigger log
-	n.addLogLocked("info", "Configuration settings updated and saved locally.")
+	if err := cfg.Validate(); err != nil {
+		n.addLog("error", fmt.Sprintf("Configuration validation failed: %v", err))
+		return err
+	}
 
-	// Save to config file
-	return SaveConfig(cfg)
+	savedCfg := CopyConfig(cfg)
+
+	// Sync autostart settings with OS
+	if err := updateAutostart(savedCfg.System.AutoStartOnBoot); err != nil {
+		n.addLog("error", fmt.Sprintf("Failed to update autostart setting: %v", err))
+	}
+
+	n.mu.Lock()
+	n.cfg = savedCfg
+	n.addLogLocked("info", "Configuration settings updated and saved locally.")
+	n.mu.Unlock()
+
+	err := SaveConfig(savedCfg)
+	if err != nil {
+		n.addLog("warning", fmt.Sprintf("Failed to persist configuration: %v", err))
+	}
+	return err
+}
+
+func (n *NodeService) saveConfigBackground(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	if err := SaveConfig(cfg); err != nil {
+		n.addLog("warning", fmt.Sprintf("Failed to persist configuration: %v", err))
+	}
 }
 
 // ToggleSharing switches the sharing state on/off
@@ -330,14 +359,7 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 	}
 
 	// Write changes to file in background
-	go func() {
-		_ = SaveConfig(cfg)
-	}()
-
-	n.addLog("warning", "Local routing service stopped. Hotspot offline.")
-	if n.ctx != nil {
-		wailsRuntime.EventsEmit(n.ctx, "wg_tunnel_stopped", nil)
-	}
+	go n.saveConfigBackground(cfg)
 	go func() {
 		n.addLog("info", "Stopping Zoop tunnel...")
 		configPath, _ := GetWGConfigPath()
@@ -472,8 +494,7 @@ func (n *NodeService) GetInterfaces() []string {
 
 	var names []string
 	for _, iface := range ifaces {
-		// Filter out loopback interfaces
-		if (iface.Flags & net.FlagLoopback) == 0 {
+		if iface.Flags&net.FlagLoopback == 0 {
 			names = append(names, iface.Name)
 		}
 	}
@@ -510,7 +531,8 @@ func (n *NodeService) DisconnectClient(mac string) bool {
 func (n *NodeService) GetLogs() []LogMessage {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.logs
+	logsCopy := append([]LogMessage(nil), n.logs...)
+	return logsCopy
 }
 
 // updateAutostart handles registering/unregistering the application to start automatically on boot.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -118,6 +119,13 @@ func LoadConfig() (*Config, error) {
 
 // SaveConfig writes the given Config struct back to config.json.
 func SaveConfig(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
 	path, err := GetConfigPath()
 	if err != nil {
 		return err
@@ -136,4 +144,41 @@ func SaveConfig(cfg *Config) error {
 	}
 
 	return os.WriteFile(path, data, 0644)
+}
+
+func (cfg *Config) Validate() error {
+	if cfg == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+	if cfg.Node.DisplayName == "" {
+		return fmt.Errorf("display name must not be empty")
+	}
+	if cfg.Sharing.MaxClients < 1 || cfg.Sharing.MaxClients > 100 {
+		return fmt.Errorf("max clients must be between 1 and 100")
+	}
+	if cfg.Sharing.BandwidthCapPercent < 10 || cfg.Sharing.BandwidthCapPercent > 100 {
+		return fmt.Errorf("bandwidth cap percent must be between 10 and 100")
+	}
+	if cfg.Sharing.RoutingPolicy == "" {
+		cfg.Sharing.RoutingPolicy = "balanced"
+	}
+	if cfg.API.Endpoint == "" {
+		return fmt.Errorf("api endpoint must not be empty")
+	}
+	if cfg.API.HeartbeatIntervalSeconds < 5 {
+		return fmt.Errorf("heartbeat interval must be at least 5 seconds")
+	}
+	return nil
+}
+
+func CopyConfig(cfg *Config) *Config {
+	if cfg == nil {
+		return nil
+	}
+	copy := *cfg
+	copy.Node = cfg.Node
+	copy.Sharing = cfg.Sharing
+	copy.System = cfg.System
+	copy.API = cfg.API
+	return &copy
 }
