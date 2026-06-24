@@ -2,10 +2,54 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
+
+var wireGuardInstallDir string
+
+func findWireGuardDir() string {
+	if wireGuardInstallDir != "" {
+		return wireGuardInstallDir
+	}
+	candidates := []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "WireGuard"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "WireGuard"),
+		`C:\Program Files\WireGuard`,
+		`C:\Program Files (x86)\WireGuard`,
+	}
+	for _, d := range candidates {
+		if d == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(d, "wg.exe")); err == nil {
+			wireGuardInstallDir = d
+			return d
+		}
+	}
+	if p, err := exec.LookPath("wg"); err == nil {
+		wireGuardInstallDir = filepath.Dir(p)
+		return wireGuardInstallDir
+	}
+	return ""
+}
+
+func wgBin() string {
+	if d := findWireGuardDir(); d != "" {
+		return filepath.Join(d, "wg.exe")
+	}
+	return "wg"
+}
+
+func wireGuardBin() string {
+	if d := findWireGuardDir(); d != "" {
+		return filepath.Join(d, "wireguard.exe")
+	}
+	return "wireguard"
+}
 
 // WireGuardManager provides a cross-platform interface for WireGuard operations
 type WireGuardManager interface {
@@ -20,14 +64,18 @@ type WireGuardManager interface {
 
 // execWGSudo runs a wg command with sudo on Unix or directly on Windows.
 func execWGSudo(args ...string) (string, error) {
-	if _, err := exec.LookPath("wg"); err != nil {
-		return "", fmt.Errorf("wg command not found. Please install wireguard-tools")
+	wgPath := wgBin()
+	if _, err := exec.LookPath(wgPath); err != nil {
+		wgPath = "wg"
+		if _, err := exec.LookPath(wgPath); err != nil {
+			return "", fmt.Errorf("wg command not found. Please install wireguard-tools")
+		}
 	}
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("wg", args...)
+		cmd = exec.Command(wgPath, args...)
 	} else {
-		cmd = exec.Command("sudo", append([]string{"wg"}, args...)...)
+		cmd = exec.Command("sudo", append([]string{wgPath}, args...)...)
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -37,16 +85,15 @@ func execWGSudo(args ...string) (string, error) {
 }
 
 // execWGQuickSudo runs wg-quick with sudo on Unix or directly on Windows.
+// On Windows, use wireguard.exe /installtunnelservice instead.
 func execWGQuickSudo(action, configPath string) error {
+	if runtime.GOOS == "windows" {
+		return execWindowsTunnel(action, configPath)
+	}
 	if _, err := exec.LookPath("wg-quick"); err != nil {
 		return fmt.Errorf("wg-quick not found. Please install wireguard-tools")
 	}
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("wg-quick", action, configPath)
-	} else {
-		cmd = exec.Command("sudo", "wg-quick", action, configPath)
-	}
+	cmd := exec.Command("sudo", "wg-quick", action, configPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		errStr := strings.TrimSpace(string(output))
@@ -57,6 +104,102 @@ func execWGQuickSudo(action, configPath string) error {
 		return fmt.Errorf("wg-quick %s failed: %s (%w)", action, errStr, err)
 	}
 	return nil
+}
+
+func resolveWireGuardExe() (string, error) {
+	wgExe := wireGuardBin()
+	if _, err := os.Stat(wgExe); err != nil {
+		if _, err := exec.LookPath("wireguard"); err != nil {
+			return "", fmt.Errorf("WireGuard not found. Please install from https://www.wireguard.com/install/")
+		}
+		return "wireguard", nil
+	}
+	return wgExe, nil
+}
+
+func execWindowsTunnel(action, configPath string) error {
+	wgExe, err := resolveWireGuardExe()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		return fmt.Errorf("config file not found: %s", configPath)
+	}
+	tunnelName := strings.TrimSuffix(filepath.Base(configPath), ".conf")
+	if tunnelName == "" || tunnelName == filepath.Base(configPath) {
+		return fmt.Errorf("invalid config filename (must end in .conf): %s", configPath)
+	}
+
+	switch action {
+	case "up":
+		return windowsTunnelUp(wgExe, configPath, tunnelName)
+	case "down":
+		return windowsTunnelDown(wgExe, tunnelName)
+	default:
+		return fmt.Errorf("unknown tunnel action: %s", action)
+	}
+}
+
+func windowsTunnelUp(wgExe, configPath, tunnelName string) error {
+	serviceName := "WireGuardTunnel$" + tunnelName
+
+	if windowsServiceExists(serviceName) {
+		exec.Command("net", "stop", serviceName).Run()
+		exec.Command(wgExe, "/uninstalltunnelservice", tunnelName).Run()
+	}
+
+	out, err := exec.Command(wgExe, "/installtunnelservice", configPath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to install WireGuard tunnel service: %s (%w)",
+			strings.TrimSpace(string(out)), err)
+	}
+
+	if !windowsServiceRunning(serviceName) {
+		out, err = exec.Command("net", "start", serviceName).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to start WireGuard tunnel service: %s (%w)",
+				strings.TrimSpace(string(out)), err)
+		}
+	}
+
+	return nil
+}
+
+func windowsTunnelDown(wgExe, tunnelName string) error {
+	serviceName := "WireGuardTunnel$" + tunnelName
+
+	if windowsServiceExists(serviceName) {
+		exec.Command("net", "stop", serviceName).Run()
+	}
+
+	out, err := exec.Command(wgExe, "/uninstalltunnelservice", tunnelName).CombinedOutput()
+	if err != nil {
+		errStr := strings.TrimSpace(string(out))
+		if strings.Contains(errStr, "The specified service does not exist") ||
+			strings.Contains(errStr, "does not exist") ||
+			strings.Contains(errStr, "Could not find") {
+			return nil
+		}
+		return fmt.Errorf("failed to uninstall WireGuard tunnel service: %s (%w)", errStr, err)
+	}
+
+	return nil
+}
+
+func windowsServiceExists(name string) bool {
+	out, err := exec.Command("sc", "query", name).CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), name)
+}
+
+func windowsServiceRunning(name string) bool {
+	out, err := exec.Command("sc", "query", name).CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "RUNNING")
 }
 
 // resolveInterfaceName resolves the interface name from the WireGuard config path.
@@ -145,6 +288,12 @@ func (m *UnixWireGuardManager) GetInterfaceName() (string, error) {
 type WindowsWireGuardManager struct{}
 
 func (m *WindowsWireGuardManager) InstallDependencies() error {
+	if _, err := exec.LookPath("wg"); err == nil {
+		return nil
+	}
+	if d := findWireGuardDir(); d != "" {
+		return nil
+	}
 	if _, err := exec.LookPath("wireguard"); err == nil {
 		return nil
 	}
