@@ -561,6 +561,72 @@ PersistentKeepalive = 25
 	return profile, nil
 }
 
+// ConnectToPeer generates a client WireGuard config and connects to the given peer
+func (n *NodeService) ConnectToPeer(nodeID string) error {
+	n.addLog("info", fmt.Sprintf("Connecting to peer %s...", nodeID))
+
+	peers, err := n.DiscoverPeers()
+	if err != nil {
+		return fmt.Errorf("failed to discover peers: %w", err)
+	}
+
+	var peer *DiscoveryPeer
+	for _, entry := range peers {
+		if entry.NodeID == nodeID {
+			peer = &entry
+			break
+		}
+	}
+	if peer == nil {
+		return fmt.Errorf("peer %q not found", nodeID)
+	}
+
+	privKey, pubKey, err := GenerateWGKeypair()
+	if err != nil {
+		return fmt.Errorf("failed to generate client keypair: %w", err)
+	}
+	n.addLog("info", fmt.Sprintf("Generated client keypair (public: %s)", pubKey))
+
+	if err := CreateClientWGConfig(privKey, peer.PublicKey, peer.Endpoint); err != nil {
+		return fmt.Errorf("failed to create client WireGuard config: %w", err)
+	}
+
+	configPath, _ := GetClientWGConfigPath()
+	n.wgManager.StopTunnel(configPath)
+
+	if err := n.wgManager.StartTunnel(configPath); err != nil {
+		return fmt.Errorf("failed to start client tunnel to peer: %w", err)
+	}
+
+	n.mu.Lock()
+	n.telemetry.TunnelActive = true
+	n.telemetry.SharingEnabled = false
+	n.telemetry.TunnelError = ""
+	n.mu.Unlock()
+
+	n.addLog("info", fmt.Sprintf("Connected to peer %s (%s)", peer.DisplayName, peer.Endpoint))
+	return nil
+}
+
+// DisconnectFromPeer stops the client WireGuard tunnel
+func (n *NodeService) DisconnectFromPeer() error {
+	n.addLog("info", "Disconnecting from peer...")
+	configPath, err := GetClientWGConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := n.wgManager.StopTunnel(configPath); err != nil {
+		n.addLog("warning", fmt.Sprintf("Failed to stop client tunnel: %v", err))
+	}
+
+	n.mu.Lock()
+	n.telemetry.TunnelActive = false
+	n.mu.Unlock()
+
+	n.addLog("info", "Disconnected from peer.")
+	return nil
+}
+
 func (n *NodeService) stopDiscoveryHeartbeat() {
 	n.mu.Lock()
 	defer n.mu.Unlock()

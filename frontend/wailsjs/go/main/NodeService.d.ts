@@ -3,9 +3,13 @@
 import {main} from '../models';
 import {context} from '../models';
 
+export function ConnectToPeer(arg1:string):Promise<void>;
+
 export function CreateConnectionProfile(arg1:string):Promise<string>;
 
 export function DisconnectClient(arg1:string):Promise<boolean>;
+
+export function DisconnectFromPeer():Promise<void>;
 
 export function DiscoverPeers():Promise<Array<main.DiscoveryPeer>>;
 

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Wifi, Monitor, Wallet, Settings as SettingsIcon, Info, Sun, Moon
 } from 'lucide-react';
 import * as runtime from "../wailsjs/runtime/runtime";
-import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs, GetTunnelStatus, DiscoverPeers, CreateConnectionProfile, GetPlatform } from "../wailsjs/go/main/NodeService";
+import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs, GetTunnelStatus, DiscoverPeers, ConnectToPeer, DisconnectFromPeer, GetPlatform } from "../wailsjs/go/main/NodeService";
 
 import Dashboard  from './components/Dashboard';
 import Sharing    from './components/Sharing';
@@ -24,6 +24,7 @@ export default function App() {
   const [clients, setClients]     = useState([]);
   const [discoveredPeers, setDiscoveredPeers] = useState([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [connectedPeerId, setConnectedPeerId] = useState(null);
   const [telemetry, setTelemetry] = useState({
     uploadSpeed: 0, downloadSpeed: 0,
     activeClientsCount: 0, totalDataShared: 0, sharingEnabled: false,
@@ -119,16 +120,27 @@ export default function App() {
     }
   }, [currentScreen]);
 
-  const handleCopyConnectionProfile = (nodeId) => {
-    CreateConnectionProfile(nodeId)
-      .then(profile => {
-        navigator.clipboard.writeText(profile);
-        toast.success('Connection profile copied.');
-      })
-      .catch(err => {
-        console.error(err);
-        toast.error('Unable to create connection profile.');
-      });
+  const handleConnectToPeer = async (nodeId) => {
+    try {
+      await ConnectToPeer(nodeId);
+      setConnectedPeerId(nodeId);
+      toast.success('Connected to peer successfully.');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to connect to peer.');
+      throw err;
+    }
+  };
+
+  const handleDisconnectFromPeer = async () => {
+    try {
+      await DisconnectFromPeer();
+      setConnectedPeerId(null);
+      toast.success('Disconnected from peer.');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to disconnect from peer.');
+    }
   };
 
   // Real-time Wails events
@@ -352,7 +364,9 @@ export default function App() {
               discoveryLoading={discoveryLoading}
               onDisconnectClient={handleDisconnectClient}
               onRefreshDiscovery={loadDiscoveredPeers}
-              onCopyConnectionProfile={handleCopyConnectionProfile}
+              onConnectToPeer={handleConnectToPeer}
+              onDisconnectFromPeer={handleDisconnectFromPeer}
+              connectedPeerId={connectedPeerId}
             />
           )}
           {currentScreen === 'earnings' && <Earnings />}

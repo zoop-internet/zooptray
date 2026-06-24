@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Monitor, Smartphone, Laptop, Tablet, Wifi, XCircle, Search, RefreshCw, Copy } from 'lucide-react';
+import { Monitor, Smartphone, Laptop, Tablet, Wifi, XCircle, Search, RefreshCw } from 'lucide-react';
 import { toast } from './Toast';
 
 // Pick an icon based on device name heuristics
@@ -14,9 +14,10 @@ function DeviceIcon({ name }) {
   return <Monitor size={18} />;
 }
 
-export default function Devices({ clients, telemetry, discoveredPeers, discoveryLoading, onDisconnectClient, onRefreshDiscovery, onCopyConnectionProfile }) {
+export default function Devices({ clients, telemetry, discoveredPeers, discoveryLoading, onDisconnectClient, onRefreshDiscovery, onConnectToPeer, onDisconnectFromPeer, connectedPeerId }) {
   const [search, setSearch] = useState('');
-  const [confirmKick, setConfirmKick] = useState(null); // mac address to confirm kick
+  const [confirmKick, setConfirmKick] = useState(null);
+  const [connectingTo, setConnectingTo] = useState(null);
 
   const isOnline = telemetry.tunnelActive;
 
@@ -42,10 +43,6 @@ export default function Devices({ clients, telemetry, discoveredPeers, discovery
     onDisconnectClient(confirmKick.mac);
     toast.warning(`${confirmKick.name} has been disconnected.`);
     setConfirmKick(null);
-  };
-
-  const handleCopyProfile = (peer) => {
-    onCopyConnectionProfile(peer.nodeId);
   };
 
   return (
@@ -179,14 +176,28 @@ export default function Devices({ clients, telemetry, discoveredPeers, discovery
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  className="btn btn-primary device-kick-btn"
-                  onClick={() => handleCopyProfile(peer)}
-                >
-                  <Copy size={14} />
-                  <span>Copy Client Profile</span>
-                </button>
+                  {connectedPeerId === peer.nodeId ? (
+                    <button
+                      type="button"
+                      className="btn btn-danger device-kick-btn"
+                      onClick={() => onDisconnectFromPeer()}
+                    >
+                      <XCircle size={14} />
+                      <span>Disconnect</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-primary device-kick-btn"
+                      disabled={connectingTo === peer.nodeId}
+                      onClick={() => {
+                        setConnectingTo(peer.nodeId);
+                        onConnectToPeer(peer.nodeId).finally(() => setConnectingTo(null));
+                      }}
+                    >
+                      <span>{connectingTo === peer.nodeId ? 'Connecting...' : 'Connect'}</span>
+                    </button>
+                  )}
               </div>
             ))}
           </div>

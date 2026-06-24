@@ -78,6 +78,48 @@ func GetWGInterfaceName() (string, error) {
 	return strings.TrimSuffix(filepath.Base(configPath), ".conf"), nil
 }
 
+// GetClientWGConfigPath returns the path to the client WireGuard config
+func GetClientWGConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".zoop", "wg-zoop-client.conf"), nil
+}
+
+// GetClientWGInterfaceName derives the client WireGuard interface name
+func GetClientWGInterfaceName() (string, error) {
+	configPath, err := GetClientWGConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(filepath.Base(configPath), ".conf"), nil
+}
+
+// CreateClientWGConfig generates a WireGuard client config to connect to a peer
+func CreateClientWGConfig(privateKey, peerPubKey, peerEndpoint string) error {
+	configPath, err := GetClientWGConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+	content := fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = 10.200.0.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = %s
+Endpoint = %s
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+`, privateKey, peerPubKey, peerEndpoint)
+
+	return os.WriteFile(configPath, []byte(content), 0600)
+}
+
 // CreateWGConfig generates a standard WireGuard config file for the sharing hotspot
 func CreateWGConfig(privateKey, preferredInterface string) error {
 	configPath, err := GetWGConfigPath()
