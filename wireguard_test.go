@@ -56,6 +56,7 @@ func TestWGConfigPathAndInterfaceName(t *testing.T) {
 func TestCreateWGConfigCreatesDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("ZOOP_SKIP_WG_SUBNET_VALIDATION", "1")
 
 	privateKey, _, err := GenerateWGKeypair()
 	if err != nil {

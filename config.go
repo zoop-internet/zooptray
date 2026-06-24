@@ -72,7 +72,7 @@ func GetDefaultConfig() *Config {
 			PreferredInterface: "",
 		},
 		API: ApiConfig{
-			Endpoint:                 "https://api.zoopnetwork.com/v1",
+			Endpoint:                 "https://zoop-peer-discovery.allan-info-comp.workers.dev",
 			HeartbeatIntervalSeconds: 15,
 		},
 	}

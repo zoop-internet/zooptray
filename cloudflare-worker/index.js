@@ -1,7 +1,7 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const { pathname, searchParams } = url;
+    const { pathname } = url;
     const method = request.method.toUpperCase();
 
     if (pathname === '/register' && method === 'POST') {
@@ -20,14 +20,62 @@ export default {
       return handleUnregister(request, env);
     }
 
-    return new Response(JSON.stringify({ error: 'Not Found' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return jsonResponse({ error: 'Not Found' }, 404);
   },
 };
 
-const REGISTRY = new Map();
+const DEFAULT_TTL_SECONDS = 60;
+
+async function getEntry(nodeId, env) {
+  if (env.DISCOVERY_KV) {
+    const data = await env.DISCOVERY_KV.get(nodeId);
+    if (!data) return null;
+    try {
+      return JSON.parse(data);
+    } catch {
+      return null;
+    }
+  }
+
+  return REGISTRY.get(nodeId) || null;
+}
+
+async function putEntry(nodeId, entry, env) {
+  if (env.DISCOVERY_KV) {
+    await env.DISCOVERY_KV.put(nodeId, JSON.stringify(entry), { expirationTtl: DEFAULT_TTL_SECONDS });
+    return;
+  }
+  REGISTRY.set(nodeId, entry);
+}
+
+async function deleteEntry(nodeId, env) {
+  if (env.DISCOVERY_KV) {
+    await env.DISCOVERY_KV.delete(nodeId);
+    return;
+  }
+  REGISTRY.delete(nodeId);
+}
+
+async function listEntries(env) {
+  if (env.DISCOVERY_KV) {
+    const list = await env.DISCOVERY_KV.list();
+    const entries = [];
+    for (const key of list.keys) {
+      const data = await env.DISCOVERY_KV.get(key.name);
+      if (!data) {
+        continue;
+      }
+      try {
+        entries.push(JSON.parse(data));
+      } catch {
+        continue;
+      }
+    }
+    return entries;
+  }
+
+  return Array.from(REGISTRY.values());
+}
 
 async function handleRegister(request, env) {
   const data = await request.json().catch(() => null);
@@ -36,24 +84,27 @@ async function handleRegister(request, env) {
   }
 
   const now = Date.now();
+  const existing = await getEntry(data.nodeId, env);
   const entry = {
     nodeId: data.nodeId,
     publicKey: data.publicKey,
     endpoint: data.endpoint,
     displayName: data.displayName || 'Zoop Node',
     region: data.region || 'global',
+    isPublic: data.isPublic !== false,
     updatedAt: now,
-    createdAt: REGISTRY.has(data.nodeId) ? REGISTRY.get(data.nodeId).createdAt : now,
+    createdAt: existing?.createdAt || now,
   };
 
-  REGISTRY.set(data.nodeId, entry);
+  await putEntry(data.nodeId, entry, env);
   return jsonResponse({ success: true, entry });
 }
 
 async function handleDiscover(request, env) {
   const url = new URL(request.url);
   const region = url.searchParams.get('region') || 'global';
-  const results = Array.from(REGISTRY.values()).filter((entry) => entry.region === region);
+  const entries = await listEntries(env);
+  const results = entries.filter((entry) => entry.region === region && entry.isPublic);
   return jsonResponse({ success: true, peers: results });
 }
 
@@ -63,13 +114,13 @@ async function handleHeartbeat(request, env) {
     return jsonResponse({ error: 'Missing nodeId' }, 400);
   }
 
-  const entry = REGISTRY.get(data.nodeId);
+  const entry = await getEntry(data.nodeId, env);
   if (!entry) {
     return jsonResponse({ error: 'Node not registered' }, 404);
   }
 
   entry.updatedAt = Date.now();
-  REGISTRY.set(data.nodeId, entry);
+  await putEntry(data.nodeId, entry, env);
   return jsonResponse({ success: true, entry });
 }
 
@@ -79,7 +130,7 @@ async function handleUnregister(request, env) {
     return jsonResponse({ error: 'Missing nodeId' }, 400);
   }
 
-  REGISTRY.delete(data.nodeId);
+  await deleteEntry(data.nodeId, env);
   return jsonResponse({ success: true });
 }
 

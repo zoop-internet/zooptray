@@ -93,8 +93,10 @@ func CreateWGConfig(privateKey, preferredInterface string) error {
 	if _, err := net.InterfaceByName(preferredInterface); err != nil {
 		return fmt.Errorf("preferred network interface %q is not available: %w", preferredInterface, err)
 	}
-	if err := ensureSubnetAvailable(defaultWGNetwork); err != nil {
-		return err
+	if !skipWireGuardSubnetValidation() {
+		if err := ensureSubnetAvailable(defaultWGNetwork); err != nil {
+			return err
+		}
 	}
 
 	// Generate platform-specific WireGuard configuration
@@ -158,6 +160,11 @@ func ensureSubnetAvailable(subnet string) error {
 	}
 
 	for _, iface := range ifaces {
+		// Skip validation for the wg-zoop interface itself (we're about to recreate it)
+		if iface.Name == "wg-zoop" {
+			continue
+		}
+
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
@@ -179,6 +186,10 @@ func ensureSubnetAvailable(subnet string) error {
 		}
 	}
 	return nil
+}
+
+func skipWireGuardSubnetValidation() bool {
+	return os.Getenv("ZOOP_SKIP_WG_SUBNET_VALIDATION") == "1"
 }
 
 func InstallWGDependenciesIfNeeded() error {

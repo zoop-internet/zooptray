@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,16 +61,17 @@ type WGInfo struct {
 }
 
 type NodeService struct {
-	ctx          context.Context
-	mu           sync.Mutex
-	cfg          *Config
-	telemetry    Telemetry
-	clients      []ClientInfo
-	logs         []LogMessage
-	sharingState bool
-	startedAt    time.Time
-	stopChan     chan struct{}
-	wgManager    WireGuardManager
+	ctx               context.Context
+	mu                sync.Mutex
+	cfg               *Config
+	telemetry         Telemetry
+	clients           []ClientInfo
+	logs              []LogMessage
+	sharingState      bool
+	startedAt         time.Time
+	discoveryStopChan chan struct{}
+	stopChan          chan struct{}
+	wgManager         WireGuardManager
 }
 
 func NewNodeService() *NodeService {
@@ -80,12 +85,13 @@ func NewNodeServiceWithManager(manager WireGuardManager) *NodeService {
 	cfg, _ := LoadConfig()
 
 	service := &NodeService{
-		cfg:          cfg,
-		sharingState: false,
-		stopChan:     make(chan struct{}),
-		logs:         make([]LogMessage, 0),
-		clients:      make([]ClientInfo, 0),
-		wgManager:    manager,
+		cfg:               cfg,
+		sharingState:      false,
+		discoveryStopChan: make(chan struct{}),
+		stopChan:          make(chan struct{}),
+		logs:              make([]LogMessage, 0),
+		clients:           make([]ClientInfo, 0),
+		wgManager:         manager,
 	}
 
 	// Add initial logs
@@ -318,6 +324,165 @@ func (n *NodeService) saveConfigBackground(cfg *Config) {
 	}
 }
 
+func (n *NodeService) discoveryBaseURL() string {
+	return strings.TrimRight(n.cfg.API.Endpoint, "/")
+}
+
+func (n *NodeService) discoveryRequest(method, url string, payload interface{}) (*http.Response, error) {
+	var body io.Reader
+	if payload != nil {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		body = bytes.NewReader(raw)
+	}
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	return client.Do(req)
+}
+
+func (n *NodeService) refreshPublicIP() {
+	ip, err := fetchPublicIP()
+	if err != nil {
+		n.addLog("warning", fmt.Sprintf("Unable to fetch public IP: %v", err))
+		return
+	}
+
+	n.mu.Lock()
+	n.telemetry.PublicIP = ip
+	n.mu.Unlock()
+}
+
+func fetchPublicIP() (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("https://api.ipify.org?format=text")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("public IP lookup returned status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(data)), nil
+}
+
+func (n *NodeService) registerDiscovery(pubKey, endpoint string) error {
+	if !n.cfg.Node.IsPublic {
+		return nil
+	}
+	if n.cfg.API.Endpoint == "" {
+		return fmt.Errorf("discovery endpoint is not configured")
+	}
+
+	payload := map[string]interface{}{
+		"nodeId":      n.cfg.Node.ID,
+		"publicKey":   pubKey,
+		"endpoint":    endpoint,
+		"displayName": n.cfg.Node.DisplayName,
+		"region":      "global",
+		"isPublic":    true,
+	}
+
+	resp, err := n.discoveryRequest("POST", n.discoveryBaseURL()+"/register", payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("discovery registration failed: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (n *NodeService) heartbeatDiscovery() error {
+	if !n.cfg.Node.IsPublic {
+		return nil
+	}
+	if n.cfg.API.Endpoint == "" {
+		return fmt.Errorf("discovery endpoint is not configured")
+	}
+
+	payload := map[string]interface{}{
+		"nodeId": n.cfg.Node.ID,
+	}
+	resp, err := n.discoveryRequest("POST", n.discoveryBaseURL()+"/heartbeat", payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("discovery heartbeat failed: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (n *NodeService) unregisterDiscovery() error {
+	if !n.cfg.Node.IsPublic {
+		return nil
+	}
+	if n.cfg.API.Endpoint == "" {
+		return fmt.Errorf("discovery endpoint is not configured")
+	}
+
+	payload := map[string]interface{}{
+		"nodeId": n.cfg.Node.ID,
+	}
+	resp, err := n.discoveryRequest("DELETE", n.discoveryBaseURL()+"/register", payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("discovery unregister failed: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (n *NodeService) stopDiscoveryHeartbeat() {
+	n.mu.Lock()
+	if n.discoveryStopChan != nil {
+		close(n.discoveryStopChan)
+		n.discoveryStopChan = nil
+	}
+	n.mu.Unlock()
+}
+
+func (n *NodeService) startDiscoveryHeartbeat() {
+	n.mu.Lock()
+	stopChan := make(chan struct{})
+	n.discoveryStopChan = stopChan
+	interval := time.Duration(n.cfg.API.HeartbeatIntervalSeconds) * time.Second
+	n.mu.Unlock()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopChan:
+			return
+		case <-ticker.C:
+			if err := n.heartbeatDiscovery(); err != nil {
+				n.addLog("warning", fmt.Sprintf("Discovery heartbeat failed: %v", err))
+			}
+		}
+	}
+}
+
 // ToggleSharing switches the sharing state on/off
 func (n *NodeService) ToggleSharing(enabled bool) bool {
 	if enabled {
@@ -360,6 +525,15 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 
 	// Write changes to file in background
 	go n.saveConfigBackground(cfg)
+	go func() {
+		n.stopDiscoveryHeartbeat()
+		if err := n.unregisterDiscovery(); err != nil {
+			n.addLog("warning", fmt.Sprintf("Failed to unregister from discovery: %v", err))
+		} else {
+			n.addLog("info", "Unregistered from Cloudflare discovery.")
+		}
+	}()
+
 	go func() {
 		n.addLog("info", "Stopping Zoop tunnel...")
 		configPath, _ := GetWGConfigPath()
@@ -445,6 +619,20 @@ func (n *NodeService) startSharingTunnel() {
 	go func() {
 		_ = SaveConfig(cfg)
 	}()
+
+	if n.cfg.Node.IsPublic {
+		n.refreshPublicIP()
+		endpoint := n.telemetry.PublicIP
+		if endpoint != "" {
+			endpoint = fmt.Sprintf("%s:51820", endpoint)
+		}
+		if err := n.registerDiscovery(pubKey, endpoint); err != nil {
+			n.addLog("warning", fmt.Sprintf("Discovery registration failed: %v", err))
+		} else {
+			n.addLog("info", "Registered node with Cloudflare discovery service.")
+			go n.startDiscoveryHeartbeat()
+		}
+	}
 
 	info.Active = true
 	n.addLog("info", "Zoop tunnel is active.")

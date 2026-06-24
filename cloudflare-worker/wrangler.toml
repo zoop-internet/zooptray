@@ -1,8 +1,12 @@
 name = "zoop-peer-discovery"
-type = "javascript"
-account_id = "YOUR_ACCOUNT_ID"
+main = "./index.js"
+account_id = "7335973a10147fee3168dac18331dbab"
 workers_dev = true
 compatibility_date = "2025-01-01"
+
+kv_namespaces = [
+  { binding = "DISCOVERY_KV", id = "b2dbbd80cf334b0ab94d00e8b6acc052" }
+]
 
 [build]
 command = "npm install"
