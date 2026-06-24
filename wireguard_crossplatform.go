@@ -206,8 +206,8 @@ func windowsServiceState(name string) string {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "STATE") {
 			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				return strings.TrimSpace(parts[2])
+			if len(parts) >= 4 {
+				return strings.TrimSpace(parts[3])
 			}
 		}
 	}

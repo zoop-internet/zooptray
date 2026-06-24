@@ -944,24 +944,19 @@ X-GNOME-Autostart-enabled=true
 		return cmd.Run()
 
 	case "windows":
-		regCmd := "add"
-		regArgs := []string{
-			"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-			"/v", "Zoop One",
-			"/t", "REG_SZ",
-			"/d", execPath,
-			"/f",
-		}
 		if !enabled {
-			regCmd = "delete"
-			regArgs = []string{
-				"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-				"/v", "Zoop One",
-				"/f",
+			// Check if the value exists before deleting
+			check := exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One")
+			if err := check.Run(); err != nil {
+				return nil
 			}
+			output, err := exec.Command("reg", "delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One", "/f").CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to update Windows registry autostart: %s (%w)", strings.TrimSpace(string(output)), err)
+			}
+			return nil
 		}
-		cmd := exec.Command("reg", append([]string{regCmd}, regArgs...)...)
-		output, err := cmd.CombinedOutput()
+		output, err := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "Zoop One", "/t", "REG_SZ", "/d", execPath, "/f").CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("failed to update Windows registry autostart: %s (%w)", strings.TrimSpace(string(output)), err)
 		}
