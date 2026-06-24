@@ -9,6 +9,8 @@ on:
 jobs:
   build-linux:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -136,5 +138,3 @@ COPYEOF
             release/zoop-one-linux-${{ github.ref_name }}.tar.gz
             release/zoop-one
             release/zoop-one_*.deb
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

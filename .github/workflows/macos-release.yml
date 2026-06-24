@@ -9,6 +9,8 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -69,5 +71,3 @@ jobs:
           name: Release ${{ github.ref_name }}
           files: |
             release/zoop-one-macos-${{ github.ref_name }}.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
