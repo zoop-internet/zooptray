@@ -78,35 +78,13 @@ jobs:
 
           install -m 755 build/bin/zoop-one "${DEB_DIR}/usr/bin/zoop-one"
 
-          cat > "${DEB_DIR}/DEBIAN/control" << CONTROLEOF
-Package: zoop-one
-Version: ${VERSION}
-Architecture: amd64
-Maintainer: Zoop Network <contact@zoopnetwork.com>
-Description: Zoop One — Community-powered desktop node
- Run a lightweight system-tray node that manages sharing,
- peer connections, local controls, and provider network operations.
-Depends: libgtk-3-0 (>= 3.24), libwebkit2gtk-4.1-0 (>= 2.40)
-CONTROLEOF
+          { echo 'Package: zoop-one'; echo "Version: ${VERSION}"; echo 'Architecture: amd64'; echo 'Maintainer: Zoop Network <contact@zoopnetwork.com>'; echo 'Description: Zoop One - Community-powered desktop node'; echo ' Run a lightweight system-tray node that manages sharing,'; echo ' peer connections, local controls, and provider network operations.'; echo 'Depends: libgtk-3-0 (>= 3.24), libwebkit2gtk-4.1-0 (>= 2.40)'; } > "${DEB_DIR}/DEBIAN/control"
 
-          cat > "${DEB_DIR}/usr/share/applications/zoop-one.desktop" << DESKTOPSOF
-[Desktop Entry]
-Name=Zoop One
-Comment=Community-powered desktop node
-Exec=/usr/bin/zoop-one
-Terminal=false
-Type=Application
-Categories=Network;Utility;
-Icon=zoop-one
-DESKTOPSOF
+          { echo '[Desktop Entry]'; echo 'Name=Zoop One'; echo 'Comment=Community-powered desktop node'; echo 'Exec=/usr/bin/zoop-one'; echo 'Terminal=false'; echo 'Type=Application'; echo 'Categories=Network;Utility;'; echo 'Icon=zoop-one'; } > "${DEB_DIR}/usr/share/applications/zoop-one.desktop"
 
           cp build/appicon.png "${DEB_DIR}/usr/share/icons/hicolor/256x256/apps/zoop-one.png"
 
-          cat > "${DEB_DIR}/DEBIAN/copyright" << COPYEOF
-Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: Zoop One
-Source: https://github.com/Zoop-Network/zooptray
-COPYEOF
+          { echo 'Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/'; echo 'Upstream-Name: Zoop One'; echo 'Source: https://github.com/Zoop-Network/zooptray'; } > "${DEB_DIR}/DEBIAN/copyright"
 
           dpkg-deb --root-owner-group --build "${DEB_DIR}" "release/zoop-one_${VERSION}_amd64.deb"
 
