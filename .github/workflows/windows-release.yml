@@ -34,8 +34,9 @@ jobs:
           npm ci
 
       - name: Create frontend dist directory
+        shell: bash
         run: |
-          mkdir -p frontend/dist && touch frontend/dist/.gitkeep
+          mkdir -p frontend/dist && touch frontend/dist/placeholder.txt
 
       - name: Generate Wails module bindings
         run: |
