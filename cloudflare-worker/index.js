@@ -20,6 +20,10 @@ export default {
       return handleUnregister(request, env);
     }
 
+    if (pathname === '/download' && method === 'GET') {
+      return handleDownload(request, env);
+    }
+
     return jsonResponse({ error: 'Not Found' }, 404);
   },
 };
@@ -132,6 +136,50 @@ async function handleUnregister(request, env) {
 
   await deleteEntry(data.nodeId, env);
   return jsonResponse({ success: true });
+}
+
+async function handleDownload(request, env) {
+  try {
+    // Fetch latest release from GitHub API
+    const response = await fetch(
+      'https://api.github.com/repos/Zoop-Network/zooptray/releases/latest',
+      {
+        headers: {
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'Zoop-Download-Helper',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      return new Response('Failed to fetch latest release', { status: 502 });
+    }
+
+    const release = await response.json();
+    if (!release.assets || release.assets.length === 0) {
+      return new Response('No release assets found', { status: 404 });
+    }
+
+    // Prefer .exe installer, fallback to .zip
+    const exeAsset = release.assets.find((a) => a.name.endsWith('.exe'));
+    const zipAsset = release.assets.find((a) => a.name.endsWith('.zip'));
+    const asset = exeAsset || zipAsset;
+
+    if (!asset) {
+      return new Response('No installer found in release', { status: 404 });
+    }
+
+    // Redirect to the download URL
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: asset.browser_download_url,
+      },
+    });
+  } catch (error) {
+    console.error('Download error:', error);
+    return new Response('Internal server error', { status: 500 });
+  }
 }
 
 function jsonResponse(body, status = 200) {
