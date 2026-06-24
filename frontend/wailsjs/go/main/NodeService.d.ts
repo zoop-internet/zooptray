@@ -15,6 +15,8 @@ export function GetInterfaces():Promise<Array<string>>;
 
 export function GetLogs():Promise<Array<main.LogMessage>>;
 
+export function GetPlatform():Promise<string>;
+
 export function GetTunnelStatus():Promise<main.Telemetry>;
 
 export function SaveConfig(arg1:main.Config):Promise<void>;

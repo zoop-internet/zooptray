@@ -26,6 +26,10 @@ export function GetLogs() {
   return window['go']['main']['NodeService']['GetLogs']();
 }
 
+export function GetPlatform() {
+  return window['go']['main']['NodeService']['GetPlatform']();
+}
+
 export function GetTunnelStatus() {
   return window['go']['main']['NodeService']['GetTunnelStatus']();
 }

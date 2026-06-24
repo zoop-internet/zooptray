@@ -80,120 +80,117 @@ export default function Devices({ clients, telemetry, discoveredPeers, discovery
         </div>
       </div>
 
-      {/* Empty states */}
+      {/* Connected clients section */}
       {!isOnline ? (
         <div className="empty-state">
           <Wifi size={36} style={{ color: 'var(--muted-dark)' }} />
           <h3>Node is Offline</h3>
           <p>Go to <strong>Sharing</strong> and enable your node to start routing guest device traffic.</p>
         </div>
+      ) : clients.length === 0 ? (
+        <div className="empty-state">
+          <Monitor size={36} style={{ color: 'var(--muted-dark)' }} />
+          <h3>No Devices Connected</h3>
+          <p>Waiting for nearby devices to discover your sharing node…</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="empty-state">
+          <Search size={36} style={{ color: 'var(--muted-dark)' }} />
+          <h3>No Results for "{search}"</h3>
+          <p>Try searching by device name, IP address, or MAC.</p>
+        </div>
       ) : (
-        <>
-          {clients.length === 0 ? (
-            <div className="empty-state">
-              <Monitor size={36} style={{ color: 'var(--muted-dark)' }} />
-              <h3>No Devices Connected</h3>
-              <p>Waiting for nearby devices to discover your sharing node…</p>
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="empty-state">
-              <Search size={36} style={{ color: 'var(--muted-dark)' }} />
-              <h3>No Results for "{search}"</h3>
-              <p>Try searching by device name, IP address, or MAC.</p>
-            </div>
-          ) : (
-            <div className="devices-grid">
-              {filtered.map(client => (
-                <div key={client.mac} className="device-card">
-                  <div className="device-card-top">
-                    <div className="device-icon-wrap">
-                      <DeviceIcon name={client.name} />
-                    </div>
-                    <div className="device-info">
-                      <div className="device-name">{client.name}</div>
-                      <div className="device-mac">{client.mac}</div>
-                    </div>
-                    <div className="device-status-dot green"></div>
-                  </div>
-
-                  <div className="device-stats">
-                    <div className="device-stat">
-                      <span className="device-stat-label">IP Address</span>
-                      <span className="device-stat-value mono">{client.ip}</span>
-                    </div>
-                    <div className="device-stat">
-                      <span className="device-stat-label">Speed</span>
-                      <span className="device-stat-value speed">{client.speed.toFixed(1)} Mbps</span>
-                    </div>
-                    <div className="device-stat">
-                      <span className="device-stat-label">Data Routed</span>
-                      <span className="device-stat-value mono">{client.dataShared.toFixed(1)} MB</span>
-                    </div>
-                    <div className="device-stat">
-                      <span className="device-stat-label">Connected Since</span>
-                      <span className="device-stat-value mono">{client.connectedAt}</span>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="btn btn-danger device-kick-btn"
-                    onClick={() => handleKickRequest(client)}
-                  >
-                    <XCircle size={14} />
-                    <span>Disconnect</span>
-                  </button>
+        <div className="devices-grid">
+          {filtered.map(client => (
+            <div key={client.mac} className="device-card">
+              <div className="device-card-top">
+                <div className="device-icon-wrap">
+                  <DeviceIcon name={client.name} />
                 </div>
-              ))}
-            </div>
-          )}
-
-          {discoveredPeers && discoveredPeers.length > 0 && (
-            <div className="discovery-section">
-              <h3>Discovered Network Nodes</h3>
-              <div className="devices-grid">
-                {filteredPeers.map(peer => (
-                  <div key={peer.nodeId} className="device-card">
-                    <div className="device-card-top">
-                      <div className="device-icon-wrap">
-                        <DeviceIcon name={peer.displayName} />
-                      </div>
-                      <div className="device-info">
-                        <div className="device-name">{peer.displayName || peer.nodeId}</div>
-                        <div className="device-mac">{peer.nodeId}</div>
-                      </div>
-                      <div className="device-status-dot green"></div>
-                    </div>
-
-                    <div className="device-stats">
-                      <div className="device-stat">
-                        <span className="device-stat-label">Endpoint</span>
-                        <span className="device-stat-value mono">{peer.endpoint}</span>
-                      </div>
-                      <div className="device-stat">
-                        <span className="device-stat-label">Region</span>
-                        <span className="device-stat-value">{peer.region || 'global'}</span>
-                      </div>
-                      <div className="device-stat">
-                        <span className="device-stat-label">Public</span>
-                        <span className="device-stat-value">{peer.isPublic ? 'Yes' : 'No'}</span>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="btn btn-primary device-kick-btn"
-                      onClick={() => handleCopyProfile(peer)}
-                    >
-                      <Copy size={14} />
-                      <span>Copy Client Profile</span>
-                    </button>
-                  </div>
-                ))}
+                <div className="device-info">
+                  <div className="device-name">{client.name}</div>
+                  <div className="device-mac">{client.mac}</div>
+                </div>
+                <div className="device-status-dot green"></div>
               </div>
+
+              <div className="device-stats">
+                <div className="device-stat">
+                  <span className="device-stat-label">IP Address</span>
+                  <span className="device-stat-value mono">{client.ip}</span>
+                </div>
+                <div className="device-stat">
+                  <span className="device-stat-label">Speed</span>
+                  <span className="device-stat-value speed">{client.speed.toFixed(1)} Mbps</span>
+                </div>
+                <div className="device-stat">
+                  <span className="device-stat-label">Data Routed</span>
+                  <span className="device-stat-value mono">{client.dataShared.toFixed(1)} MB</span>
+                </div>
+                <div className="device-stat">
+                  <span className="device-stat-label">Connected Since</span>
+                  <span className="device-stat-value mono">{client.connectedAt}</span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-danger device-kick-btn"
+                onClick={() => handleKickRequest(client)}
+              >
+                <XCircle size={14} />
+                <span>Disconnect</span>
+              </button>
             </div>
-          )}
-        </>
+          ))}
+        </div>
+      )}
+
+      {/* Discovered peers section — always visible regardless of local tunnel state */}
+      {discoveredPeers && discoveredPeers.length > 0 && (
+        <div className="discovery-section">
+          <h3>Discovered Network Nodes</h3>
+          <div className="devices-grid">
+            {filteredPeers.map(peer => (
+              <div key={peer.nodeId} className="device-card">
+                <div className="device-card-top">
+                  <div className="device-icon-wrap">
+                    <DeviceIcon name={peer.displayName} />
+                  </div>
+                  <div className="device-info">
+                    <div className="device-name">{peer.displayName || peer.nodeId}</div>
+                    <div className="device-mac">{peer.nodeId}</div>
+                  </div>
+                  <div className="device-status-dot green"></div>
+                </div>
+
+                <div className="device-stats">
+                  <div className="device-stat">
+                    <span className="device-stat-label">Endpoint</span>
+                    <span className="device-stat-value mono">{peer.endpoint}</span>
+                  </div>
+                  <div className="device-stat">
+                    <span className="device-stat-label">Region</span>
+                    <span className="device-stat-value">{peer.region || 'global'}</span>
+                  </div>
+                  <div className="device-stat">
+                    <span className="device-stat-label">Public</span>
+                    <span className="device-stat-value">{peer.isPublic ? 'Yes' : 'No'}</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn-primary device-kick-btn"
+                  onClick={() => handleCopyProfile(peer)}
+                >
+                  <Copy size={14} />
+                  <span>Copy Client Profile</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Kick Confirmation Dialog */}
