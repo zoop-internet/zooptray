@@ -1,0 +1,19 @@
+Zoop One End-User License Agreement (EULA)
+
+PLEASE READ THIS AGREEMENT BEFORE INSTALLING OR USING THIS SOFTWARE.
+
+By installing or using Zoop One, you agree to the terms and conditions described herein.
+
+1. License
+You are granted a non-exclusive license to use this software.
+
+2. Warranty
+This software is provided "AS IS" without warranty of any kind.
+
+3. Liability
+In no event shall the authors be liable for any damages arising from use of this software.
+
+4. Acceptance
+Installation of this software indicates acceptance of this EULA.
+
+For full terms visit: https://github.com/Zoop-Network/zooptray

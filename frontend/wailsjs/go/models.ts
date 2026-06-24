@@ -17,6 +17,7 @@ export namespace main {
 	export class SystemConfig {
 	    autoStartOnBoot: boolean;
 	    preferredInterface: string;
+	    eulaAccepted: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SystemConfig(source);
@@ -26,6 +27,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.autoStartOnBoot = source["autoStartOnBoot"];
 	        this.preferredInterface = source["preferredInterface"];
+	        this.eulaAccepted = source["eulaAccepted"];
 	    }
 	}
 	export class SharingConfig {

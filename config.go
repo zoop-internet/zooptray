@@ -24,6 +24,7 @@ type SharingConfig struct {
 type SystemConfig struct {
 	AutoStartOnBoot    bool   `json:"autoStartOnBoot"`
 	PreferredInterface string `json:"preferredInterface"`
+	EulaAccepted       bool   `json:"eulaAccepted"`
 }
 
 type ApiConfig struct {
@@ -70,6 +71,7 @@ func GetDefaultConfig() *Config {
 		System: SystemConfig{
 			AutoStartOnBoot:    false,
 			PreferredInterface: "",
+			EulaAccepted:       false,
 		},
 		API: ApiConfig{
 			Endpoint:                 "https://zoop-peer-discovery.allan-info-comp.workers.dev",

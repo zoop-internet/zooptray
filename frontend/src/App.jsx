@@ -30,6 +30,8 @@ export default function App() {
     tunnelActive: false, tunnelError: '', startedAt: '', publicIP: ''
   });
 
+  const [eulaVisible, setEulaVisible] = useState(false);
+
   const [bandwidthHistory, setBandwidthHistory] = useState(Array(20).fill(0));
   const [dataHistory, setDataHistory]           = useState(Array(20).fill(0));
 
@@ -72,6 +74,10 @@ export default function App() {
   useEffect(() => {
     GetConfig().then(cfg => {
       setConfig(cfg);
+      const isWindows = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent);
+      if (!cfg.system?.eulaAccepted && isWindows) {
+        setEulaVisible(true);
+      }
       setTelemetry(prev => ({ ...prev, sharingEnabled: cfg.sharing.enabled }));
     }).catch(err => {
       console.error(err);
@@ -214,6 +220,21 @@ export default function App() {
       });
   };
 
+  const acceptEula = () => {
+    if (!config) return;
+    const updated = { ...config };
+    if (!updated.system) updated.system = {};
+    updated.system.eulaAccepted = true;
+    SaveConfig(updated).then(() => {
+      setConfig(updated);
+      setEulaVisible(false);
+      toast.info('Thank you for accepting the EULA.');
+    }).catch(err => {
+      console.error(err);
+      toast.error('Failed to persist EULA acceptance');
+    });
+  };
+
   const screenDetails = {
     dashboard: { title: 'Dashboard',  subtitle: 'Live overview of your node' },
     sharing:   { title: 'Sharing',    subtitle: 'Control your sharing preferences' },
@@ -342,6 +363,27 @@ export default function App() {
           )}
         </section>
       </main>
+      {eulaVisible && (
+        <div className="confirm-overlay" onClick={() => {}}>
+          <div className="confirm-dialog" style={{ maxWidth: '720px' }} onClick={e => e.stopPropagation()}>
+            <h2>End User License Agreement</h2>
+            <div style={{ maxHeight: '48vh', overflow: 'auto', marginBottom: '12px' }}>
+              <p>By using this software you agree to the Zoop Network terms and conditions. Please read them carefully before proceeding.</p>
+              <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla facilisi. Suspendisse potenti.</p>
+              <p>— Zoop Network</p>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button className="btn" onClick={() => { /* Decline: do nothing for now */ }}>
+                Decline
+              </button>
+              <button className="btn btn-primary" onClick={acceptEula}>
+                Accept and Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
