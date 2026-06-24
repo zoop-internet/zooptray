@@ -54,48 +54,48 @@ jobs:
       - name: Build Windows binary
         run: |
           wails build -platform windows/amd64 -clean
-
-      - name: List build output
         shell: bash
-        run: |
-          echo "=== build/bin contents ==="
-          ls -la build/bin/ 2>/dev/null || echo "build/bin/ does not exist"
-          echo "=== Recursive build tree ==="
-          find build/ -type f 2>/dev/null || echo "build/ does not exist"
 
       - name: Stage NSIS installer files
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path "windows_installer/staging" -Force | Out-Null
-          if (-not (Test-Path "build/bin/zoop-one.exe")) { throw "build/bin/zoop-one.exe not found after wails build" }
-          Copy-Item "build/bin/zoop-one.exe" "windows_installer/staging/zoop-one.exe" -ErrorAction Stop
-          Copy-Item "windows_installer/config_installer.json" "windows_installer/staging/config.json" -ErrorAction Stop
-          Write-Host "=== staging contents ==="
-          Get-ChildItem "windows_installer/staging/"
-
-      - name: Build NSIS installer
-        working-directory: windows_installer
         shell: bash
         run: |
-          makensis -DVERSION="${{ github.ref_name }}" zoop_installer.nsi
+          mkdir -p windows_installer/staging
+          cp build/bin/zoop-one.exe windows_installer/staging/
+          cp windows_installer/config_installer.json windows_installer/staging/
+          ls -la windows_installer/staging/
 
-      - name: Determine installer path
-        id: installer
-        shell: pwsh
+      - name: Build NSIS installer
+        shell: bash
         run: |
-          $path = "windows_installer\zoop-one-installer-${{ github.ref_name }}.exe"
-          if (-not (Test-Path $path)) {
-            $path = "windows_installer\zoop-one-installer-unknown.exe"
-          }
-          echo "path=$path" >> $env:GITHUB_OUTPUT
+          echo "=== CWD ==="
+          pwd
+          echo "=== Staging from CWD ==="
+          ls -la windows_installer/staging/
+          cd windows_installer
+          makensis -DVERSION="${{ github.ref_name }}" zoop_installer.nsi
+          echo "=== Built installer ==="
+          ls -la *.exe
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoop-one-windows-binary
+          path: build/bin/zoop-one.exe
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoop-one-windows-installer
+          path: windows_installer/zoop-one-installer-*.exe
 
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           files: |
-            ${{ steps.installer.outputs.path }}
             build/bin/zoop-one.exe
+            windows_installer/zoop-one-installer-*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
