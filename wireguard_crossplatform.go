@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 var wireGuardInstallDir string
@@ -144,7 +145,7 @@ func windowsTunnelUp(wgExe, configPath, tunnelName string) error {
 	serviceName := "WireGuardTunnel$" + tunnelName
 
 	if windowsServiceExists(serviceName) {
-		exec.Command("net", "stop", serviceName).Run()
+		windowsStopService(serviceName)
 		exec.Command(wgExe, "/uninstalltunnelservice", tunnelName).Run()
 	}
 
@@ -154,12 +155,8 @@ func windowsTunnelUp(wgExe, configPath, tunnelName string) error {
 			strings.TrimSpace(string(out)), err)
 	}
 
-	if !windowsServiceRunning(serviceName) {
-		out, err = exec.Command("net", "start", serviceName).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to start WireGuard tunnel service: %s (%w)",
-				strings.TrimSpace(string(out)), err)
-		}
+	if err := windowsWaitForServiceRunning(serviceName, 15); err != nil {
+		return err
 	}
 
 	return nil
@@ -169,7 +166,7 @@ func windowsTunnelDown(wgExe, tunnelName string) error {
 	serviceName := "WireGuardTunnel$" + tunnelName
 
 	if windowsServiceExists(serviceName) {
-		exec.Command("net", "stop", serviceName).Run()
+		windowsStopService(serviceName)
 	}
 
 	out, err := exec.Command(wgExe, "/uninstalltunnelservice", tunnelName).CombinedOutput()
@@ -180,7 +177,13 @@ func windowsTunnelDown(wgExe, tunnelName string) error {
 			strings.Contains(errStr, "Could not find") {
 			return nil
 		}
+		exec.Command("sc", "delete", serviceName).Run()
 		return fmt.Errorf("failed to uninstall WireGuard tunnel service: %s (%w)", errStr, err)
+	}
+
+	if err := windowsWaitForServiceGone(serviceName, 10); err != nil {
+		exec.Command("sc", "delete", serviceName).Run()
+		return err
 	}
 
 	return nil
@@ -194,12 +197,68 @@ func windowsServiceExists(name string) bool {
 	return strings.Contains(string(out), name)
 }
 
-func windowsServiceRunning(name string) bool {
+func windowsServiceState(name string) string {
 	out, err := exec.Command("sc", "query", name).CombinedOutput()
 	if err != nil {
-		return false
+		return ""
 	}
-	return strings.Contains(string(out), "RUNNING")
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "STATE") {
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				return strings.TrimSpace(parts[2])
+			}
+		}
+	}
+	return ""
+}
+
+func windowsStopService(name string) {
+	exec.Command("net", "stop", name).Run()
+	exec.Command("sc", "stop", name).Run()
+	windowsWaitForServiceState(name, "STOPPED", 10)
+}
+
+func windowsWaitForServiceRunning(name string, timeoutSec int) error {
+	for i := 0; i < timeoutSec*2; i++ {
+		state := windowsServiceState(name)
+		switch state {
+		case "RUNNING":
+			return nil
+		case "STOPPED":
+			exec.Command("net", "start", name).Run()
+		case "":
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	state := windowsServiceState(name)
+	return fmt.Errorf("WireGuard tunnel service did not reach RUNNING state (current: %s). Check WireGuard driver installation.", state)
+}
+
+func windowsWaitForServiceGone(name string, timeoutSec int) error {
+	for i := 0; i < timeoutSec*2; i++ {
+		if !windowsServiceExists(name) {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("WireGuard tunnel service still exists after uninstall")
+}
+
+func windowsWaitForServiceState(name, targetState string, timeoutSec int) {
+	for i := 0; i < timeoutSec*2; i++ {
+		state := windowsServiceState(name)
+		if state == targetState {
+			return
+		}
+		if state == "" {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // resolveInterfaceName resolves the interface name from the WireGuard config path.
