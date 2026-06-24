@@ -61,7 +61,7 @@ jobs:
         run: |
           mkdir -p windows_installer/staging
           cp build/bin/zoop-one.exe windows_installer/staging/
-          cp windows_installer/config_installer.json windows_installer/staging/
+          cp windows_installer/config_installer.json windows_installer/staging/config.json
           ls -la windows_installer/staging/
 
       - name: Build NSIS installer
