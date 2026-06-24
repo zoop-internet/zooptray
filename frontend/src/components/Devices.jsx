@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Monitor, Smartphone, Laptop, Tablet, Wifi, XCircle, Search, RefreshCw } from 'lucide-react';
+import { Monitor, Smartphone, Laptop, Tablet, Wifi, XCircle, Search, RefreshCw, Copy } from 'lucide-react';
 import { toast } from './Toast';
 
 // Pick an icon based on device name heuristics
@@ -14,7 +14,7 @@ function DeviceIcon({ name }) {
   return <Monitor size={18} />;
 }
 
-export default function Devices({ clients, telemetry, onDisconnectClient }) {
+export default function Devices({ clients, telemetry, discoveredPeers, discoveryLoading, onDisconnectClient, onRefreshDiscovery, onCopyConnectionProfile }) {
   const [search, setSearch] = useState('');
   const [confirmKick, setConfirmKick] = useState(null); // mac address to confirm kick
 
@@ -26,6 +26,13 @@ export default function Devices({ clients, telemetry, onDisconnectClient }) {
     c.mac.toLowerCase().includes(search.toLowerCase())
   );
 
+  const filteredPeers = discoveredPeers.filter(peer =>
+    peer.displayName.toLowerCase().includes(search.toLowerCase()) ||
+    peer.endpoint.toLowerCase().includes(search.toLowerCase()) ||
+    peer.nodeId.toLowerCase().includes(search.toLowerCase()) ||
+    peer.region.toLowerCase().includes(search.toLowerCase())
+  );
+
   const handleKickRequest = (client) => {
     setConfirmKick(client);
   };
@@ -35,6 +42,10 @@ export default function Devices({ clients, telemetry, onDisconnectClient }) {
     onDisconnectClient(confirmKick.mac);
     toast.warning(`${confirmKick.name} has been disconnected.`);
     setConfirmKick(null);
+  };
+
+  const handleCopyProfile = (peer) => {
+    onCopyConnectionProfile(peer.nodeId);
   };
 
   return (
@@ -52,7 +63,10 @@ export default function Devices({ clients, telemetry, onDisconnectClient }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          {/* Search bar */}
+          <button className="btn btn-secondary" type="button" onClick={onRefreshDiscovery}>
+            <RefreshCw size={14} />
+            <span style={{ marginLeft: '6px' }}>Refresh Network</span>
+          </button>
           <div className="devices-search">
             <Search size={15} />
             <input
@@ -73,63 +87,113 @@ export default function Devices({ clients, telemetry, onDisconnectClient }) {
           <h3>Node is Offline</h3>
           <p>Go to <strong>Sharing</strong> and enable your node to start routing guest device traffic.</p>
         </div>
-      ) : filtered.length === 0 && clients.length === 0 ? (
-        <div className="empty-state">
-          <Monitor size={36} style={{ color: 'var(--muted-dark)' }} />
-          <h3>No Devices Connected</h3>
-          <p>Waiting for nearby devices to discover your sharing node…</p>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="empty-state">
-          <Search size={36} style={{ color: 'var(--muted-dark)' }} />
-          <h3>No Results for "{search}"</h3>
-          <p>Try searching by device name, IP address, or MAC.</p>
-        </div>
       ) : (
-        <div className="devices-grid">
-          {filtered.map(client => (
-            <div key={client.mac} className="device-card">
-              <div className="device-card-top">
-                <div className="device-icon-wrap">
-                  <DeviceIcon name={client.name} />
-                </div>
-                <div className="device-info">
-                  <div className="device-name">{client.name}</div>
-                  <div className="device-mac">{client.mac}</div>
-                </div>
-                <div className="device-status-dot green"></div>
-              </div>
-
-              <div className="device-stats">
-                <div className="device-stat">
-                  <span className="device-stat-label">IP Address</span>
-                  <span className="device-stat-value mono">{client.ip}</span>
-                </div>
-                <div className="device-stat">
-                  <span className="device-stat-label">Speed</span>
-                  <span className="device-stat-value speed">{client.speed.toFixed(1)} Mbps</span>
-                </div>
-                <div className="device-stat">
-                  <span className="device-stat-label">Data Routed</span>
-                  <span className="device-stat-value mono">{client.dataShared.toFixed(1)} MB</span>
-                </div>
-                <div className="device-stat">
-                  <span className="device-stat-label">Connected Since</span>
-                  <span className="device-stat-value mono">{client.connectedAt}</span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="btn btn-danger device-kick-btn"
-                onClick={() => handleKickRequest(client)}
-              >
-                <XCircle size={14} />
-                <span>Disconnect</span>
-              </button>
+        <>
+          {clients.length === 0 ? (
+            <div className="empty-state">
+              <Monitor size={36} style={{ color: 'var(--muted-dark)' }} />
+              <h3>No Devices Connected</h3>
+              <p>Waiting for nearby devices to discover your sharing node…</p>
             </div>
-          ))}
-        </div>
+          ) : filtered.length === 0 ? (
+            <div className="empty-state">
+              <Search size={36} style={{ color: 'var(--muted-dark)' }} />
+              <h3>No Results for "{search}"</h3>
+              <p>Try searching by device name, IP address, or MAC.</p>
+            </div>
+          ) : (
+            <div className="devices-grid">
+              {filtered.map(client => (
+                <div key={client.mac} className="device-card">
+                  <div className="device-card-top">
+                    <div className="device-icon-wrap">
+                      <DeviceIcon name={client.name} />
+                    </div>
+                    <div className="device-info">
+                      <div className="device-name">{client.name}</div>
+                      <div className="device-mac">{client.mac}</div>
+                    </div>
+                    <div className="device-status-dot green"></div>
+                  </div>
+
+                  <div className="device-stats">
+                    <div className="device-stat">
+                      <span className="device-stat-label">IP Address</span>
+                      <span className="device-stat-value mono">{client.ip}</span>
+                    </div>
+                    <div className="device-stat">
+                      <span className="device-stat-label">Speed</span>
+                      <span className="device-stat-value speed">{client.speed.toFixed(1)} Mbps</span>
+                    </div>
+                    <div className="device-stat">
+                      <span className="device-stat-label">Data Routed</span>
+                      <span className="device-stat-value mono">{client.dataShared.toFixed(1)} MB</span>
+                    </div>
+                    <div className="device-stat">
+                      <span className="device-stat-label">Connected Since</span>
+                      <span className="device-stat-value mono">{client.connectedAt}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn btn-danger device-kick-btn"
+                    onClick={() => handleKickRequest(client)}
+                  >
+                    <XCircle size={14} />
+                    <span>Disconnect</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {discoveredPeers && discoveredPeers.length > 0 && (
+            <div className="discovery-section">
+              <h3>Discovered Network Nodes</h3>
+              <div className="devices-grid">
+                {filteredPeers.map(peer => (
+                  <div key={peer.nodeId} className="device-card">
+                    <div className="device-card-top">
+                      <div className="device-icon-wrap">
+                        <DeviceIcon name={peer.displayName} />
+                      </div>
+                      <div className="device-info">
+                        <div className="device-name">{peer.displayName || peer.nodeId}</div>
+                        <div className="device-mac">{peer.nodeId}</div>
+                      </div>
+                      <div className="device-status-dot green"></div>
+                    </div>
+
+                    <div className="device-stats">
+                      <div className="device-stat">
+                        <span className="device-stat-label">Endpoint</span>
+                        <span className="device-stat-value mono">{peer.endpoint}</span>
+                      </div>
+                      <div className="device-stat">
+                        <span className="device-stat-label">Region</span>
+                        <span className="device-stat-value">{peer.region || 'global'}</span>
+                      </div>
+                      <div className="device-stat">
+                        <span className="device-stat-label">Public</span>
+                        <span className="device-stat-value">{peer.isPublic ? 'Yes' : 'No'}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="btn btn-primary device-kick-btn"
+                      onClick={() => handleCopyProfile(peer)}
+                    >
+                      <Copy size={14} />
+                      <span>Copy Client Profile</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Kick Confirmation Dialog */}

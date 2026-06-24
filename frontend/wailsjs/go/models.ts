@@ -100,6 +100,30 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class DiscoveryPeer {
+	    nodeId: string;
+	    publicKey: string;
+	    endpoint: string;
+	    displayName: string;
+	    region: string;
+	    isPublic: boolean;
+	    updatedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiscoveryPeer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.nodeId = source["nodeId"];
+	        this.publicKey = source["publicKey"];
+	        this.endpoint = source["endpoint"];
+	        this.displayName = source["displayName"];
+	        this.region = source["region"];
+	        this.isPublic = source["isPublic"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
 	export class LogMessage {
 	    timestamp: string;
 	    level: string;

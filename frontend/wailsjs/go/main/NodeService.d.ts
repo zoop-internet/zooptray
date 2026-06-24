@@ -3,7 +3,11 @@
 import {main} from '../models';
 import {context} from '../models';
 
+export function CreateConnectionProfile(arg1:string):Promise<string>;
+
 export function DisconnectClient(arg1:string):Promise<boolean>;
+
+export function DiscoverPeers():Promise<Array<main.DiscoveryPeer>>;
 
 export function GetConfig():Promise<main.Config>;
 

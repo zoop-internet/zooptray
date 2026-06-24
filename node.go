@@ -42,6 +42,16 @@ type ClientInfo struct {
 	TxBytes     float64 `json:"-"`
 }
 
+type DiscoveryPeer struct {
+	NodeID      string `json:"nodeId"`
+	PublicKey   string `json:"publicKey"`
+	Endpoint    string `json:"endpoint"`
+	DisplayName string `json:"displayName"`
+	Region      string `json:"region"`
+	IsPublic    bool   `json:"isPublic"`
+	UpdatedAt   int64  `json:"updatedAt"`
+}
+
 type LogMessage struct {
 	Timestamp string `json:"timestamp"`
 	Level     string `json:"level"` // "info", "warning", "error"
@@ -134,6 +144,25 @@ func (n *NodeService) Startup(ctx context.Context) {
 // Shutdown is called by Wails on exit
 func (n *NodeService) Shutdown(ctx context.Context) {
 	close(n.stopChan)
+
+	// Stop any active discovery heartbeat and unregister from public discovery.
+	n.stopDiscoveryHeartbeat()
+	if err := n.unregisterDiscovery(); err != nil {
+		n.addLog("warning", fmt.Sprintf("Failed to unregister from discovery during shutdown: %v", err))
+	} else {
+		n.addLog("info", "Unregistered from Cloudflare discovery during shutdown.")
+	}
+
+	configPath, err := GetWGConfigPath()
+	if err == nil {
+		if err := n.wgManager.StopTunnel(configPath); err != nil {
+			n.addLog("warning", fmt.Sprintf("Failed to stop Zoop tunnel during shutdown: %v", err))
+		} else {
+			n.addLog("info", "Zoop tunnel stopped during app shutdown.")
+		}
+	} else {
+		n.addLog("warning", fmt.Sprintf("Unable to resolve WireGuard config path during shutdown: %v", err))
+	}
 }
 
 // addLogLocked appends a log entry and emits it without locking n.mu (caller must hold the lock)
@@ -452,6 +481,72 @@ func (n *NodeService) unregisterDiscovery() error {
 	return nil
 }
 
+func (n *NodeService) DiscoverPeers() ([]DiscoveryPeer, error) {
+	if n.cfg.API.Endpoint == "" {
+		return nil, fmt.Errorf("discovery endpoint is not configured")
+	}
+
+	url := fmt.Sprintf("%s/discover?region=global", n.discoveryBaseURL())
+	resp, err := n.discoveryRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("discovery failed: status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Success bool            `json:"success"`
+		Peers   []DiscoveryPeer `json:"peers"`
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	if !result.Success {
+		return nil, fmt.Errorf("discovery service returned failure")
+	}
+
+	return result.Peers, nil
+}
+
+func (n *NodeService) CreateConnectionProfile(nodeID string) (string, error) {
+	peers, err := n.DiscoverPeers()
+	if err != nil {
+		return "", err
+	}
+
+	var peer *DiscoveryPeer
+	for _, entry := range peers {
+		if entry.NodeID == nodeID {
+			peer = &entry
+			break
+		}
+	}
+	if peer == nil {
+		return "", fmt.Errorf("peer %q not found", nodeID)
+	}
+
+	profile := fmt.Sprintf(`[Interface]
+PrivateKey = <CLIENT_PRIVATE_KEY>
+Address = 10.200.0.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = %s
+Endpoint = %s
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+`, peer.PublicKey, peer.Endpoint)
+
+	return profile, nil
+}
+
 func (n *NodeService) stopDiscoveryHeartbeat() {
 	n.mu.Lock()
 	if n.discoveryStopChan != nil {
@@ -594,6 +689,15 @@ func (n *NodeService) startSharingTunnel() {
 		Address:    "10.200.0.1/24",
 		Interface:  ifName,
 		ConfigPath: configPath,
+	}
+
+	// Attempt to clean up any stale interface before starting.
+	// This avoids `wg-quick: `wg-zoop' already exists` errors when a previous run
+	// left the interface behind.
+	if stopErr := n.wgManager.StopTunnel(configPath); stopErr != nil {
+		n.addLog("info", fmt.Sprintf("Pre-start: attempt to stop existing wg interface reported: %v", stopErr))
+	} else {
+		n.addLog("info", "Pre-start: removed stale wg interface (if present)")
 	}
 
 	n.addLog("info", "Starting Zoop tunnel...")

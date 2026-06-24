@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Wifi, Monitor, Wallet, Settings as SettingsIcon, Info, Sun, Moon
 } from 'lucide-react';
 import * as runtime from "../wailsjs/runtime/runtime";
-import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs, GetTunnelStatus } from "../wailsjs/go/main/NodeService";
+import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs, GetTunnelStatus, DiscoverPeers, CreateConnectionProfile } from "../wailsjs/go/main/NodeService";
 
 import Dashboard  from './components/Dashboard';
 import Sharing    from './components/Sharing';
@@ -22,6 +22,8 @@ export default function App() {
   const [interfaces, setInterfaces] = useState([]);
   const [logs, setLogs]           = useState([]);
   const [clients, setClients]     = useState([]);
+  const [discoveredPeers, setDiscoveredPeers] = useState([]);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [telemetry, setTelemetry] = useState({
     uploadSpeed: 0, downloadSpeed: 0,
     activeClientsCount: 0, totalDataShared: 0, sharingEnabled: false,
@@ -91,6 +93,36 @@ export default function App() {
       toast.warning('Unable to get tunnel status');
     });
   }, []);
+
+  const loadDiscoveredPeers = () => {
+    setDiscoveryLoading(true);
+    DiscoverPeers()
+      .then(setDiscoveredPeers)
+      .catch(err => {
+        console.error(err);
+        setDiscoveredPeers([]);
+        toast.warning('Unable to discover network devices.');
+      })
+      .finally(() => setDiscoveryLoading(false));
+  };
+
+  useEffect(() => {
+    if (currentScreen === 'devices') {
+      loadDiscoveredPeers();
+    }
+  }, [currentScreen]);
+
+  const handleCopyConnectionProfile = (nodeId) => {
+    CreateConnectionProfile(nodeId)
+      .then(profile => {
+        navigator.clipboard.writeText(profile);
+        toast.success('Connection profile copied.');
+      })
+      .catch(err => {
+        console.error(err);
+        toast.error('Unable to create connection profile.');
+      });
+  };
 
   // Real-time Wails events
   useEffect(() => {
@@ -294,7 +326,11 @@ export default function App() {
             <Devices
               clients={clients}
               telemetry={telemetry}
+              discoveredPeers={discoveredPeers}
+              discoveryLoading={discoveryLoading}
               onDisconnectClient={handleDisconnectClient}
+              onRefreshDiscovery={loadDiscoveredPeers}
+              onCopyConnectionProfile={handleCopyConnectionProfile}
             />
           )}
           {currentScreen === 'earnings' && <Earnings />}
