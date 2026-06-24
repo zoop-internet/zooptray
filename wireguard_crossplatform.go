@@ -30,10 +30,16 @@ func findWireGuardDir() string {
 			wireGuardInstallDir = d
 			return d
 		}
+		if _, err := os.Stat(filepath.Join(d, "wireguard.exe")); err == nil {
+			wireGuardInstallDir = d
+			return d
+		}
 	}
-	if p, err := exec.LookPath("wg"); err == nil {
-		wireGuardInstallDir = filepath.Dir(p)
-		return wireGuardInstallDir
+	for _, name := range []string{"wg", "wireguard"} {
+		if p, err := exec.LookPath(name); err == nil {
+			wireGuardInstallDir = filepath.Dir(p)
+			return wireGuardInstallDir
+		}
 	}
 	return ""
 }

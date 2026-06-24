@@ -347,17 +347,38 @@ func GetDefaultRouteInterface() string {
 			}
 		}
 	case "windows":
-		// Windows: use 'netsh interface ipv4 show interfaces' command
-		cmd := exec.Command("netsh", "interface", "ipv4", "show", "interfaces")
+		// Windows: use PowerShell to get the default route interface name
+		cmd := exec.Command("powershell", "-c", "Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -ExpandProperty InterfaceAlias")
 		output, err := cmd.Output()
+		if err == nil {
+			if name := strings.TrimSpace(string(output)); name != "" && !strings.Contains(name, "Get-NetRoute") {
+				return name
+			}
+		}
+		// Fallback: parse 'netsh interface ipv4 show interfaces' for any connected interface
+		cmd = exec.Command("netsh", "interface", "ipv4", "show", "interfaces")
+		output, err = cmd.Output()
 		if err == nil {
 			lines := strings.Split(string(output), "\n")
 			for _, line := range lines {
-				if strings.Contains(line, "Connected") && strings.Contains(line, "Dedicated") {
+				line = strings.TrimSpace(line)
+				if strings.Contains(line, "connected") || strings.Contains(line, "Connected") {
 					fields := strings.Fields(line)
-					if len(fields) >= 1 {
-						// The interface name is typically the first field
-						return strings.TrimSpace(fields[0])
+					if len(fields) >= 4 {
+						// Name is everything after the state column
+						stateIdx := -1
+						for i, f := range fields {
+							if f == "connected" || f == "Connected" {
+								stateIdx = i
+								break
+							}
+						}
+						if stateIdx > 0 && stateIdx < len(fields)-1 {
+							name := strings.Join(fields[stateIdx+1:], " ")
+							if name != "" {
+								return name
+							}
+						}
 					}
 				}
 			}
