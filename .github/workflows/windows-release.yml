@@ -55,11 +55,23 @@ jobs:
         run: |
           wails build -platform windows/amd64 -clean
 
-      - name: Stage NSIS installer files
+      - name: List build output
+        shell: bash
         run: |
-          if (-not (Test-Path "windows_installer/staging")) { New-Item -ItemType Directory -Path "windows_installer/staging" }
-          Copy-Item "build/bin/zoop-one.exe" "windows_installer/staging/zoop-one.exe"
-          Copy-Item "windows_installer/config_installer.json" "windows_installer/staging/config.json"
+          echo "=== build/bin contents ==="
+          ls -la build/bin/ 2>/dev/null || echo "build/bin/ does not exist"
+          echo "=== Recursive build tree ==="
+          find build/ -type f 2>/dev/null || echo "build/ does not exist"
+
+      - name: Stage NSIS installer files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "windows_installer/staging" -Force | Out-Null
+          if (-not (Test-Path "build/bin/zoop-one.exe")) { throw "build/bin/zoop-one.exe not found after wails build" }
+          Copy-Item "build/bin/zoop-one.exe" "windows_installer/staging/zoop-one.exe" -ErrorAction Stop
+          Copy-Item "windows_installer/config_installer.json" "windows_installer/staging/config.json" -ErrorAction Stop
+          Write-Host "=== staging contents ==="
+          Get-ChildItem "windows_installer/staging/"
 
       - name: Build NSIS installer
         working-directory: windows_installer
