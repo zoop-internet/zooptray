@@ -199,29 +199,29 @@ func InstallWGDependenciesIfNeeded() error {
 
 	_, err := exec.LookPath("wg-quick")
 	if err == nil {
-		// Already installed, ensure IP forwarding is active (non-blocking)
 		_ = exec.Command("sudo", "-n", "sysctl", "-w", "net.ipv4.ip_forward=1").Run()
 		return nil
 	}
 
-	// wg-quick is missing, attempt auto-install using pkexec with the detected package manager
-	if _, err := os.Stat("/usr/bin/apt-get"); err == nil {
-		// Debian / Ubuntu / Mint
-		cmd := exec.Command("pkexec", "sh", "-c", "apt-get update && apt-get install -y wireguard wireguard-tools iptables && sysctl -w net.ipv4.ip_forward=1")
+	if _, err := os.Stat("/usr/sbin/sysctl"); err == nil {
+		_ = exec.Command("sudo", "-n", "/usr/sbin/sysctl", "-w", "net.ipv4.ip_forward=1").Run()
+	}
+
+	if stat, err := os.Stat("/usr/bin/apt-get"); err == nil && stat.Mode().IsRegular() {
+		_ = exec.Command("pkexec", "/usr/bin/apt-get", "update").Run()
+		cmd := exec.Command("pkexec", "/usr/bin/apt-get", "install", "-y", "wireguard", "wireguard-tools", "iptables")
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("failed to auto-install dependencies: %s (%v)", string(output), err)
 		}
-	} else if _, err := os.Stat("/usr/bin/dnf"); err == nil {
-		// Fedora / RHEL
-		cmd := exec.Command("pkexec", "sh", "-c", "dnf install -y wireguard-tools iptables && sysctl -w net.ipv4.ip_forward=1")
+	} else if stat, err := os.Stat("/usr/bin/dnf"); err == nil && stat.Mode().IsRegular() {
+		cmd := exec.Command("pkexec", "/usr/bin/dnf", "install", "-y", "wireguard-tools", "iptables")
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("failed to auto-install dependencies: %s (%v)", string(output), err)
 		}
-	} else if _, err := os.Stat("/usr/bin/pacman"); err == nil {
-		// Arch Linux
-		cmd := exec.Command("pkexec", "sh", "-c", "pacman -S --noconfirm wireguard-tools iptables && sysctl -w net.ipv4.ip_forward=1")
+	} else if stat, err := os.Stat("/usr/bin/pacman"); err == nil && stat.Mode().IsRegular() {
+		cmd := exec.Command("pkexec", "/usr/bin/pacman", "-S", "--noconfirm", "wireguard-tools", "iptables")
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("failed to auto-install dependencies: %s (%v)", string(output), err)
@@ -230,84 +230,8 @@ func InstallWGDependenciesIfNeeded() error {
 		return fmt.Errorf("wg-quick utility not found. Please install wireguard-tools manually for your Linux distribution")
 	}
 
-	return nil
-}
-
-func executeWGQuick(action, configPath string) error {
-	if action != "up" && action != "down" {
-		return fmt.Errorf("invalid wg-quick action: %s", action)
-	}
-
-	if _, err := exec.LookPath("wg-quick"); err != nil {
-		return fmt.Errorf("wg-quick not found. Please install wireguard-tools")
-	}
-
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("wg-quick", action, configPath)
-	} else {
-		cmd = exec.Command("sudo", "wg-quick", action, configPath)
-	}
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		errMsg := strings.TrimSpace(string(output))
-		if action == "down" && (strings.Contains(errMsg, "is not a WireGuard interface") || strings.Contains(errMsg, "does not exist")) {
-			return nil
-		}
-		return fmt.Errorf("wg-quick %s failed: %s (%w)", action, errMsg, err)
-	}
-	return nil
-}
-
-// StartWGTunnel calls wg-quick to start the WireGuard interface
-func StartWGTunnel() error {
-	configPath, err := GetWGConfigPath()
-	if err != nil {
-		return err
-	}
-	return executeWGQuick("up", configPath)
-}
-
-// StopWGTunnel calls wg-quick to stop the WireGuard interface
-func StopWGTunnel() error {
-	configPath, err := GetWGConfigPath()
-	if err != nil {
-		return err
-	}
-	return executeWGQuick("down", configPath)
-}
-
-// AddWGPeer registers a client peer on the WireGuard interface
-func AddWGPeer(peerPubKey, clientIP string) error {
-	ifName, err := GetWGInterfaceName()
-	if err != nil {
-		return err
-	}
-	if _, err := exec.LookPath("wg"); err != nil {
-		return fmt.Errorf("wg command not found. Please install wireguard-tools")
-	}
-	cmd := exec.Command("sudo", "wg", "set", ifName, "peer", peerPubKey, "allowed-ips", clientIP+"/32")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to add peer: %s (%w)", strings.TrimSpace(string(output)), err)
-	}
-	return nil
-}
-
-// RemoveWGPeer deletes a client peer from the WireGuard interface
-func RemoveWGPeer(peerPubKey string) error {
-	ifName, err := GetWGInterfaceName()
-	if err != nil {
-		return err
-	}
-	if _, err := exec.LookPath("wg"); err != nil {
-		return fmt.Errorf("wg command not found. Please install wireguard-tools")
-	}
-	cmd := exec.Command("sudo", "wg", "set", ifName, "peer", peerPubKey, "remove")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to remove peer: %s (%w)", strings.TrimSpace(string(output)), err)
+	if _, err := os.Stat("/usr/sbin/sysctl"); err == nil {
+		_ = exec.Command("pkexec", "/usr/sbin/sysctl", "-w", "net.ipv4.ip_forward=1").Run()
 	}
 	return nil
 }

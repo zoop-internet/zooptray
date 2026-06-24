@@ -4,88 +4,73 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 jobs:
   build-windows:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
 
       - name: Install frontend deps
         working-directory: ./frontend
         run: |
           npm ci
-          npm run build || true
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.23'
+          npm run build
 
       - name: Install Wails CLI
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@latest
-          echo "$GOPATH/bin" >> $GITHUB_PATH
-
-      - name: Build Windows binary (amd64)
-        env:
-          WAILS_ENV: production
-        run: |
-          wails build -platform windows/amd64 -output build/windows -clean
-
-      - name: Package artifacts
-        run: |
-          mkdir -p release
-          cd build/windows || exit 0
-          zip -r ../../release/zoop-one-windows-${GITHUB_REF_NAME}.zip . || true
-
-      - name: Prepare NSIS staging
-        run: |
-          mkdir -p windows_installer/staging
-          cp -r build/windows/* windows_installer/staging/ || true
-          cp windows_installer/config_installer.json windows_installer/staging/config.json || true
 
       - name: Install NSIS
         run: |
-          sudo apt-get update
-          sudo apt-get install -y nsis
+          choco install nsis.portable --no-progress
+
+      - name: Build Windows binary
+        run: |
+          wails build -platform windows/amd64 -clean
+
+      - name: Stage NSIS installer files
+        run: |
+          if (-not (Test-Path "windows_installer/staging")) { New-Item -ItemType Directory -Path "windows_installer/staging" }
+          Copy-Item "build/bin/zoop-one.exe" "windows_installer/staging/zoop-one.exe"
+          Copy-Item "windows_installer/config_installer.json" "windows_installer/staging/config.json"
 
       - name: Build NSIS installer
         working-directory: windows_installer
         run: |
           makensis -DVERSION=${{ github.ref_name }} zoop_installer.nsi
-        env:
-          GITHUB_REF_NAME: ${{ github.ref_name }}
+        shell: cmd
 
-      - name: Package release artifacts
+      - name: Determine installer path
+        id: installer
+        shell: pwsh
         run: |
-          mkdir -p release
-          cp windows_installer/zoop-one-installer-${{ github.ref_name }}.exe release/ || \
-            cp windows_installer/zoop-one-installer-unknown.exe release/ || true
-          cd build/windows || exit 0
-          zip -r ../../release/zoop-one-windows-${GITHUB_REF_NAME}.zip . || true
+          $path = "windows_installer\zoop-one-installer-${{ github.ref_name }}.exe"
+          if (-not (Test-Path $path)) {
+            $path = "windows_installer\zoop-one-installer-unknown.exe"
+          }
+          echo "path=$path" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        id: create_release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Release Artifacts
-        uses: softprops/action-gh-release@v1
-        with:
           files: |
-            release/*.zip
-            release/*.exe
+            ${{ steps.installer.outputs.path }}
+            build/bin/zoop-one.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

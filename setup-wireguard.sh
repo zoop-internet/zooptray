@@ -50,13 +50,21 @@ printf '%s\n' 'net.ipv4.ip_forward = 1' | sudo tee "$SYSCTL_FILE" >/dev/null
 sudo sysctl --system >/dev/null
 
 echo "[4/5] Locating WireGuard commands..."
-WG_PATH="$(command -v wg || true)"
-WG_QUICK_PATH="$(command -v wg-quick || true)"
-SYSCTL_PATH="$(command -v sysctl || true)"
-if [ -z "$WG_PATH" ] || [ -z "$WG_QUICK_PATH" ] || [ -z "$SYSCTL_PATH" ]; then
-    echo "wg, wg-quick, or sysctl could not be found after installation." >&2
-    exit 1
-fi
+# Use verified absolute paths to prevent PATH hijacking
+for cmd_path in "/usr/bin/wg" "/usr/bin/wg-quick" "/usr/sbin/sysctl"; do
+    if [ ! -x "$cmd_path" ]; then
+        # Fallback: attempt PATH resolution if the standard path is missing
+        resolved="$(command -v "${cmd_path##*/}" || true)"
+        if [ -z "$resolved" ]; then
+            echo "${cmd_path##*/} could not be found after installation." >&2
+            exit 1
+        fi
+        eval "$(echo "${cmd_path##*/}" | tr 'a-z-' 'A-Z_')_PATH=$resolved"
+    fi
+done
+WG_PATH="${WG_PATH:-/usr/bin/wg}"
+WG_QUICK_PATH="${WG_QUICK_PATH:-/usr/bin/wg-quick}"
+SYSCTL_PATH="${SYSCTL_PATH:-/usr/sbin/sysctl}"
 
 echo "[5/5] Configuring passwordless sudo for Zoop WireGuard commands..."
 SUDOERS_FILE="/etc/sudoers.d/zoop-wireguard"

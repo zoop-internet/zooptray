@@ -61,7 +61,6 @@ type LogMessage struct {
 // WGInfo holds the readable WireGuard configuration sent to the frontend
 type WGInfo struct {
 	PublicKey  string `json:"publicKey"`
-	PrivateKey string `json:"privateKey"`
 	ListenPort int    `json:"listenPort"`
 	Address    string `json:"address"`
 	Interface  string `json:"wgInterface"`
@@ -71,17 +70,18 @@ type WGInfo struct {
 }
 
 type NodeService struct {
-	ctx               context.Context
-	mu                sync.Mutex
-	cfg               *Config
-	telemetry         Telemetry
-	clients           []ClientInfo
-	logs              []LogMessage
-	sharingState      bool
-	startedAt         time.Time
-	discoveryStopChan chan struct{}
-	stopChan          chan struct{}
-	wgManager         WireGuardManager
+	ctx             context.Context
+	mu              sync.Mutex
+	cfg             *Config
+	telemetry       Telemetry
+	clients         []ClientInfo
+	logs            []LogMessage
+	sharingState    bool
+	startedAt       time.Time
+	discoveryCtx    context.Context
+	discoveryCancel context.CancelFunc
+	stopChan        chan struct{}
+	wgManager       WireGuardManager
 }
 
 func NewNodeService() *NodeService {
@@ -95,13 +95,12 @@ func NewNodeServiceWithManager(manager WireGuardManager) *NodeService {
 	cfg, _ := LoadConfig()
 
 	service := &NodeService{
-		cfg:               cfg,
-		sharingState:      false,
-		discoveryStopChan: make(chan struct{}),
-		stopChan:          make(chan struct{}),
-		logs:              make([]LogMessage, 0),
-		clients:           make([]ClientInfo, 0),
-		wgManager:         manager,
+		cfg:          cfg,
+		sharingState: false,
+		stopChan:     make(chan struct{}),
+		logs:         make([]LogMessage, 0),
+		clients:      make([]ClientInfo, 0),
+		wgManager:    manager,
 	}
 
 	// Add initial logs
@@ -182,9 +181,10 @@ func (n *NodeService) addLogLocked(level, message string) {
 	// Print to stdout for debugging
 	fmt.Printf("[%s] %s: %s\n", logEntry.Timestamp, logEntry.Level, logEntry.Message)
 
-	// Write to ~/.zoop/zoop.log for persistent debugging
+	// Write to ~/.zoop/zoop.log for persistent debugging with rotation
 	if home, err := os.UserHomeDir(); err == nil {
 		logFile := filepath.Join(home, ".zoop", "zoop.log")
+		rotateLogFile(logFile)
 		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err == nil {
 			fmt.Fprintf(f, "[%s] %s: %s\n", logEntry.Timestamp, logEntry.Level, logEntry.Message)
@@ -196,6 +196,20 @@ func (n *NodeService) addLogLocked(level, message string) {
 	if n.ctx != nil {
 		wailsRuntime.EventsEmit(n.ctx, "log_added", logEntry)
 	}
+}
+
+// rotateLogFile rotates the log file if it exceeds 1MB, keeping up to 3 backups.
+func rotateLogFile(logPath string) {
+	info, err := os.Stat(logPath)
+	if err != nil || info.Size() < 1<<20 {
+		return
+	}
+	for i := 2; i >= 0; i-- {
+		old := fmt.Sprintf("%s.%d", logPath, i)
+		new := fmt.Sprintf("%s.%d", logPath, i+1)
+		os.Rename(old, new)
+	}
+	os.Rename(logPath, logPath+".1")
 }
 
 // addLog appends a log entry and emits it to the frontend
@@ -549,17 +563,23 @@ PersistentKeepalive = 25
 
 func (n *NodeService) stopDiscoveryHeartbeat() {
 	n.mu.Lock()
-	if n.discoveryStopChan != nil {
-		close(n.discoveryStopChan)
-		n.discoveryStopChan = nil
+	defer n.mu.Unlock()
+	if n.discoveryCancel != nil {
+		n.discoveryCancel()
+		n.discoveryCancel = nil
+		n.discoveryCtx = nil
 	}
-	n.mu.Unlock()
 }
 
 func (n *NodeService) startDiscoveryHeartbeat() {
 	n.mu.Lock()
-	stopChan := make(chan struct{})
-	n.discoveryStopChan = stopChan
+	// Cancel any existing heartbeat
+	if n.discoveryCancel != nil {
+		n.discoveryCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	n.discoveryCtx = ctx
+	n.discoveryCancel = cancel
 	interval := time.Duration(n.cfg.API.HeartbeatIntervalSeconds) * time.Second
 	n.mu.Unlock()
 
@@ -568,7 +588,7 @@ func (n *NodeService) startDiscoveryHeartbeat() {
 
 	for {
 		select {
-		case <-stopChan:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if err := n.heartbeatDiscovery(); err != nil {
@@ -684,7 +704,6 @@ func (n *NodeService) startSharingTunnel() {
 	ifName, _ := GetWGInterfaceName()
 	info := WGInfo{
 		PublicKey:  pubKey,
-		PrivateKey: privKey,
 		ListenPort: 51820,
 		Address:    "10.200.0.1/24",
 		Interface:  ifName,
@@ -777,11 +796,16 @@ func (n *NodeService) failTunnelStart(err error, info WGInfo) {
 	}
 }
 
-// GetInterfaces retrieves all local hardware interfaces on the machine
+// GetPlatform returns the current operating system (for frontend platform detection)
+func (n *NodeService) GetPlatform() string {
+	return runtime.GOOS
+}
+
+// GetInterfaces retrieves all local non-loopback network interfaces on the machine
 func (n *NodeService) GetInterfaces() []string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return []string{"wlan0", "eth0", "en0"} // fallback
+		return []string{}
 	}
 
 	var names []string
@@ -791,9 +815,6 @@ func (n *NodeService) GetInterfaces() []string {
 		}
 	}
 
-	if len(names) == 0 {
-		return []string{"wlan0", "eth0", "en0"}
-	}
 	return names
 }
 
@@ -923,31 +944,28 @@ X-GNOME-Autostart-enabled=true
 		return cmd.Run()
 
 	case "windows":
-		// Windows: use registry or shortcut in startup folder
-		// For now, use the startup folder approach
-		appData, err := os.UserConfigDir()
-		if err != nil {
-			return err
+		regCmd := "add"
+		regArgs := []string{
+			"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+			"/v", "Zoop One",
+			"/t", "REG_SZ",
+			"/d", execPath,
+			"/f",
 		}
-		startupDir := filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
-		shortcutPath := filepath.Join(startupDir, "Zoop One.lnk")
-
 		if !enabled {
-			if _, err := os.Stat(shortcutPath); err == nil {
-				return os.Remove(shortcutPath)
+			regCmd = "delete"
+			regArgs = []string{
+				"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+				"/v", "Zoop One",
+				"/f",
 			}
-			return nil
 		}
-
-		// Ensure directory exists
-		if err := os.MkdirAll(startupDir, 0755); err != nil {
-			return err
+		cmd := exec.Command("reg", append([]string{regCmd}, regArgs...)...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to update Windows registry autostart: %s (%w)", strings.TrimSpace(string(output)), err)
 		}
-
-		// On Windows, we would typically create a shortcut here
-		// For simplicity, we'll copy the executable (not ideal, but works)
-		// In a production app, you'd use a proper shortcut creation method
-		return os.WriteFile(shortcutPath, []byte(fmt.Sprintf("Shortcut to: %s", execPath)), 0644)
+		return nil
 
 	default:
 		return fmt.Errorf("autostart not supported on %s", runtime.GOOS)

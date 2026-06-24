@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Check, Pause, Play, CheckCircle, AlertCircle, Copy,
-  Shield, Key, Globe, Loader, AlertTriangle, Server
+  Key, Globe, Loader, AlertTriangle, Server
 } from 'lucide-react';
 import { toast } from './Toast';
 
@@ -77,7 +77,6 @@ export default function Dashboard({
   // ── Zoop Config fields to display ─────────────────────────────────────
   const wgFields = wgInfo ? [
     { key: 'Public Key',   value: wgInfo.publicKey,            icon: <Key size={14} />,    mono: true  },
-    { key: 'Private Key',  value: wgInfo.privateKey,           icon: <Shield size={14} />, mono: true, sensitive: true },
     { key: 'Listen Port',  value: String(wgInfo.listenPort),   icon: <Globe size={14} />,  mono: false },
     { key: 'Address',      value: wgInfo.address,              icon: <Server size={14} />, mono: false },
     { key: 'Interface',    value: wgInfo.wgInterface,          icon: <Globe size={14} />,  mono: false },
@@ -144,10 +143,7 @@ export default function Dashboard({
                         <div className="wg-field-icon">{f.icon}</div>
                         <div className="wg-field-label">{f.key}</div>
                         <div className={`wg-field-value ${f.mono ? 'mono' : ''}`}>
-                          {f.sensitive
-                            ? <span className="wg-sensitive">••••••••••••••••••••••••••••••••••••••••••</span>
-                            : <span>{f.value}</span>
-                          }
+                          <span>{f.value}</span>
                         </div>
                         <button
                           type="button"

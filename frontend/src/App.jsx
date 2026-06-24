@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Wifi, Monitor, Wallet, Settings as SettingsIcon, Info, Sun, Moon
 } from 'lucide-react';
 import * as runtime from "../wailsjs/runtime/runtime";
-import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs, GetTunnelStatus, DiscoverPeers, CreateConnectionProfile } from "../wailsjs/go/main/NodeService";
+import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs, GetTunnelStatus, DiscoverPeers, CreateConnectionProfile, GetPlatform } from "../wailsjs/go/main/NodeService";
 
 import Dashboard  from './components/Dashboard';
 import Sharing    from './components/Sharing';
@@ -74,10 +74,11 @@ export default function App() {
   useEffect(() => {
     GetConfig().then(cfg => {
       setConfig(cfg);
-      const isWindows = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent);
-      if (!cfg.system?.eulaAccepted && isWindows) {
-        setEulaVisible(true);
-      }
+      GetPlatform().then(platform => {
+        if (!cfg.system?.eulaAccepted && platform === 'windows') {
+          setEulaVisible(true);
+        }
+      });
       setTelemetry(prev => ({ ...prev, sharingEnabled: cfg.sharing.enabled }));
     }).catch(err => {
       console.error(err);

@@ -19,3 +19,10 @@ Thumbs.db
 # Go dependencies
 go.sum
 vendor/
+
+# Installer binaries
+windows_installer/*.exe
+windows_installer/*.zip
+windows_installer/staging/
+linux_installer/*.tar.gz
+linux_installer/zoop-one

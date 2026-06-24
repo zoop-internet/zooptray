@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGenerateWGKeypairAndDerivePublicKey(t *testing.T) {
@@ -212,5 +214,114 @@ func TestSaveConfigAndLoadConfig(t *testing.T) {
 	}
 	if loaded.API.HeartbeatIntervalSeconds != cfg.API.HeartbeatIntervalSeconds {
 		t.Fatalf("loaded heartbeat interval = %d, want %d", loaded.API.HeartbeatIntervalSeconds, cfg.API.HeartbeatIntervalSeconds)
+	}
+}
+
+func TestGetPlatform(t *testing.T) {
+	service := NewNodeServiceWithManager(&fakeWireGuardManager{})
+	platform := service.GetPlatform()
+	if platform != runtime.GOOS {
+		t.Fatalf("GetPlatform() = %q, want %q", platform, runtime.GOOS)
+	}
+}
+
+func TestGetInterfacesNoLoopback(t *testing.T) {
+	service := NewNodeServiceWithManager(&fakeWireGuardManager{})
+	ifaces := service.GetInterfaces()
+	for _, name := range ifaces {
+		if name == "lo" {
+			t.Fatalf("GetInterfaces() includes loopback interface 'lo'")
+		}
+	}
+}
+
+func TestParseWGDumpWithRealPeers(t *testing.T) {
+	output := strings.Join([]string{
+		"wg-zoop\tserver-priv\tserver-pub\t51820\toff",
+		"wg-zoop\tpeer-one\t(none)\t10.0.0.1:12345\t10.200.0.2/32\t1710000000\t1048576\t2097152\toff",
+		"wg-zoop\tpeer-two\t(none)\t10.0.0.2:12345\t10.200.0.3/32\t1710000001\t512\t1024\toff",
+	}, "\n")
+
+	peers := ParseWGDump(output)
+	if len(peers) != 2 {
+		t.Fatalf("len(peers) = %d, want 2", len(peers))
+	}
+	if peers[0].IP != "10.200.0.2/32" {
+		t.Fatalf("peer[0].IP = %q, want 10.200.0.2/32", peers[0].IP)
+	}
+	if peers[1].IP != "10.200.0.3/32" {
+		t.Fatalf("peer[1].IP = %q, want 10.200.0.3/32", peers[1].IP)
+	}
+}
+
+func TestRotateLogFile(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "test.log")
+
+	// Write a small file — should not rotate
+	if err := os.WriteFile(logPath, []byte("small"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rotateLogFile(logPath)
+	if _, err := os.Stat(logPath + ".1"); err == nil {
+		t.Fatal("rotateLogFile created a backup for a small file")
+	}
+
+	// Write a 2MB file — should rotate
+	data := make([]byte, 2<<20)
+	if err := os.WriteFile(logPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	rotateLogFile(logPath)
+	if _, err := os.Stat(logPath + ".1"); err != nil {
+		t.Fatal("rotateLogFile did not create a backup for a 2MB file")
+	}
+}
+
+func TestGetWireGuardManagerDispatch(t *testing.T) {
+	mgr := GetWireGuardManager()
+	if mgr == nil {
+		t.Fatal("GetWireGuardManager() returned nil")
+	}
+
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		if _, ok := mgr.(*UnixWireGuardManager); !ok {
+			t.Fatalf("expected *UnixWireGuardManager for %s, got %T", runtime.GOOS, mgr)
+		}
+	case "windows":
+		if _, ok := mgr.(*WindowsWireGuardManager); !ok {
+			t.Fatalf("expected *WindowsWireGuardManager for windows, got %T", mgr)
+		}
+	default:
+		if _, ok := mgr.(*UnsupportedWireGuardManager); !ok {
+			t.Fatalf("expected *UnsupportedWireGuardManager for %s, got %T", runtime.GOOS, mgr)
+		}
+	}
+}
+
+func TestDiscoveryHeartbeatContextCancellation(t *testing.T) {
+	service := NewNodeServiceWithManager(&fakeWireGuardManager{})
+	service.cfg.Node.IsPublic = true
+	service.cfg.API.HeartbeatIntervalSeconds = 1
+
+	// Start the heartbeat in a goroutine
+	go service.startDiscoveryHeartbeat()
+
+	// Give it time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Stop it — should cancel the context and return
+	stopped := make(chan struct{})
+	go func() {
+		service.stopDiscoveryHeartbeat()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		// Success
+	case <-time.After(3 * time.Second):
+		t.Fatal("stopDiscoveryHeartbeat did not return within 3s (context cancellation failed)")
 	}
 }
