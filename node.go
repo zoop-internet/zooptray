@@ -417,12 +417,36 @@ func (n *NodeService) discoveryRequest(method, url string, payload interface{}) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	// Configure HTTP client with Windows-compatible settings
+	transport := &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// Enable HTTP/2 for better performance
+		ForceAttemptHTTP2:     true,
+	}
+	client := &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: transport,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		// Check for DNS errors in the response
 		if strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "lookup") {
 			return nil, fmt.Errorf("discovery service DNS resolution failed: %v. Please check your internet connection and that the discovery URL %s is correct", err, n.discoveryBaseURL())
+		}
+		// Check for Windows-specific connection errors
+		if strings.Contains(err.Error(), "wsarecv") || strings.Contains(err.Error(), "connection was aborted") {
+			return nil, fmt.Errorf("discovery service connection aborted. This may be caused by: %s. Please check your firewall/antivirus settings and ensure %s is allowed", 
+				"(1) Windows Firewall blocking the connection, (2) Antivirus software interference, (3) Corporate proxy/VPN, (4) Network connectivity issues", n.discoveryBaseURL())
+		}
+		// Check for TLS/SSL errors
+		if strings.Contains(err.Error(), "tls") || strings.Contains(err.Error(), "ssl") || strings.Contains(err.Error(), "certificate") {
+			return nil, fmt.Errorf("discovery service TLS/SSL error: %v. This may indicate a certificate or TLS version issue", err)
+		}
+		// Check for timeout errors
+		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
+			return nil, fmt.Errorf("discovery service request timed out: %v. Please check your internet connection", err)
 		}
 		return nil, fmt.Errorf("discovery request failed: %w", err)
 	}
