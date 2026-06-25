@@ -84,21 +84,42 @@ func execWGSudo(args ...string) (string, error) {
 			return "", fmt.Errorf("wg command not found. Please install wireguard-tools")
 		}
 	}
-	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = execCmd(wgPath, args...)
-	} else {
-		cmd = execCmd("sudo", append([]string{wgPath}, args...)...)
+		cmd := execCmd(wgPath, args...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("wg command failed: %s (%w)", strings.TrimSpace(string(output)), err)
+		}
+		return string(output), nil
 	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+
+	if os.Geteuid() == 0 {
+		cmd := execCmd(wgPath, args...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("wg command failed: %s (%w)", strings.TrimSpace(string(output)), err)
+		}
+		return string(output), nil
+	}
+
+	for _, runner := range []string{"sudo", "pkexec"} {
+		if _, err := exec.LookPath(runner); err != nil {
+			continue
+		}
+		cmd := execCmd(runner, append([]string{wgPath}, args...)...)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			return string(output), nil
+		}
+		if runner == "sudo" && strings.Contains(strings.TrimSpace(string(output)), "no new privileges") {
+			continue
+		}
 		return "", fmt.Errorf("wg command failed: %s (%w)", strings.TrimSpace(string(output)), err)
 	}
-	return string(output), nil
+	return "", fmt.Errorf("wg command requires root privileges but sudo/pkexec are unavailable")
 }
 
-// execWGQuickSudo runs wg-quick with sudo on Unix or directly on Windows.
-// On Windows, use wireguard.exe /installtunnelservice instead.
+// execWGQuick runs wg-quick, trying sudo first, then pkexec, or directly if root.
 func execWGQuickSudo(action, configPath string) error {
 	if runtime.GOOS == "windows" {
 		return execWindowsTunnel(action, configPath)
@@ -106,17 +127,44 @@ func execWGQuickSudo(action, configPath string) error {
 	if _, err := exec.LookPath("wg-quick"); err != nil {
 		return fmt.Errorf("wg-quick not found. Please install wireguard-tools")
 	}
-	cmd := execCmd("sudo", "wg-quick", action, configPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+
+	// If already root, run directly
+	if os.Geteuid() == 0 {
+		cmd := execCmd("wg-quick", action, configPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			errStr := strings.TrimSpace(string(output))
+			if action == "down" && (strings.Contains(errStr, "is not a WireGuard interface") ||
+				strings.Contains(errStr, "does not exist")) {
+				return nil
+			}
+			return fmt.Errorf("wg-quick %s failed: %s (%w)", action, errStr, err)
+		}
+		return nil
+	}
+
+	// Try sudo, then fall back to pkexec
+	for _, runner := range []string{"sudo", "pkexec"} {
+		if _, err := exec.LookPath(runner); err != nil {
+			continue
+		}
+		cmd := execCmd(runner, "wg-quick", action, configPath)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			return nil
+		}
 		errStr := strings.TrimSpace(string(output))
 		if action == "down" && (strings.Contains(errStr, "is not a WireGuard interface") ||
 			strings.Contains(errStr, "does not exist")) {
 			return nil
 		}
+		// If runner is sudo and the error is specifically about NoNewPrivileges, try next runner
+		if runner == "sudo" && strings.Contains(errStr, "no new privileges") {
+			continue
+		}
 		return fmt.Errorf("wg-quick %s failed: %s (%w)", action, errStr, err)
 	}
-	return nil
+	return fmt.Errorf("wg-quick %s requires root privileges but sudo/pkexec are unavailable", action)
 }
 
 func resolveWireGuardExe() (string, error) {
