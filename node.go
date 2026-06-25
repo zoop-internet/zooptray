@@ -82,6 +82,7 @@ type NodeService struct {
 	discoveryCancel context.CancelFunc
 	stopChan        chan struct{}
 	wgManager       WireGuardManager
+	connectedPeerID string // nodeId of the peer we are currently connected to
 }
 
 func NewNodeService() *NodeService {
@@ -239,6 +240,10 @@ func (n *NodeService) runTelemetryLoop() {
 			publicIP := n.telemetry.PublicIP
 			n.mu.Unlock()
 
+			if active {
+				n.checkPendingConnections()
+			}
+
 			var nextTelemetry Telemetry
 			var nextClients []ClientInfo
 			deactivateTunnel := false
@@ -312,6 +317,16 @@ func (n *NodeService) runTelemetryLoop() {
 
 			if deactivateTunnel {
 				go n.saveConfigBackground(cfg)
+				// Stop discovery heartbeat and unregister so this node
+				// doesn't appear as available when the tunnel is broken.
+				go func() {
+					n.stopDiscoveryHeartbeat()
+					if err := n.unregisterDiscovery(); err != nil {
+						n.addLog("warning", fmt.Sprintf("Failed to unregister after tunnel failure: %v", err))
+					} else {
+						n.addLog("info", "Unregistered from discovery after tunnel failure.")
+					}
+				}()
 			}
 			if n.ctx != nil {
 				wailsRuntime.EventsEmit(n.ctx, "telemetry_updated", currentTelemetry)
@@ -459,8 +474,27 @@ func (n *NodeService) heartbeatDiscovery() error {
 		return fmt.Errorf("discovery endpoint is not configured")
 	}
 
+	n.mu.Lock()
+	displayName := n.cfg.Node.DisplayName
+	isPublic := n.cfg.Node.IsPublic
+	isActive := n.telemetry.TunnelActive
+	publicIP := n.telemetry.PublicIP
+	n.mu.Unlock()
+
 	payload := map[string]interface{}{
-		"nodeId": n.cfg.Node.ID,
+		"nodeId":      n.cfg.Node.ID,
+		"displayName": displayName,
+		"isPublic":    isPublic,
+	}
+	// Only send key/endpoint when tunnel is active to avoid overwriting
+	// registered values with empty strings.
+	if isActive {
+		if pk := n.getWGPubKey(); pk != "" {
+			payload["publicKey"] = pk
+		}
+		if publicIP != "" {
+			payload["endpoint"] = fmt.Sprintf("%s:51820", publicIP)
+		}
 	}
 	resp, err := n.discoveryRequest("POST", n.discoveryBaseURL()+"/heartbeat", payload)
 	if err != nil {
@@ -471,6 +505,18 @@ func (n *NodeService) heartbeatDiscovery() error {
 		return fmt.Errorf("discovery heartbeat failed: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (n *NodeService) getWGPubKey() string {
+	privKey, err := getOrGenerateWGPrivateKey()
+	if err != nil {
+		return ""
+	}
+	pubKey, err := DerivePublicKey(privKey)
+	if err != nil {
+		return ""
+	}
+	return pubKey
 }
 
 func (n *NodeService) unregisterDiscovery() error {
@@ -621,7 +667,15 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 		return err
 	}
 
+	// Register with the peer via the discovery worker so the peer adds us to its WG config
+	if err := n.sendConnectRequest(peer.NodeID, pubKey); err != nil {
+		n.addLog("warning", fmt.Sprintf("Failed to send connect request to discovery: %v", err))
+	} else {
+		n.addLog("info", "Sent connect request to peer via discovery service")
+	}
+
 	n.mu.Lock()
+	n.connectedPeerID = peer.NodeID
 	n.telemetry.TunnelActive = true
 	n.telemetry.SharingEnabled = false
 	n.telemetry.TunnelError = ""
@@ -634,6 +688,20 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 // DisconnectFromPeer stops the client WireGuard tunnel
 func (n *NodeService) DisconnectFromPeer() error {
 	n.addLog("info", "Disconnecting from peer...")
+
+	n.mu.Lock()
+	targetID := n.connectedPeerID
+	n.connectedPeerID = ""
+	n.mu.Unlock()
+
+	if targetID != "" {
+		if err := n.cancelConnectRequest(targetID); err != nil {
+			n.addLog("warning", fmt.Sprintf("Failed to cancel connect request: %v", err))
+		} else {
+			n.addLog("info", "Cancelled connect request with discovery service.")
+		}
+	}
+
 	configPath, err := GetClientWGConfigPath()
 	if err != nil {
 		return err
@@ -648,6 +716,101 @@ func (n *NodeService) DisconnectFromPeer() error {
 
 	n.addLog("info", "Disconnected from peer.")
 	return nil
+}
+
+// sendConnectRequest tells the discovery worker that we (nodeId) want to connect to targetNodeId.
+// The target node will pick this up on its next poll and add our public key to its WireGuard config.
+func (n *NodeService) sendConnectRequest(targetNodeId, clientPubKey string) error {
+	if n.cfg.API.Endpoint == "" {
+		return fmt.Errorf("discovery endpoint is not configured")
+	}
+	payload := map[string]interface{}{
+		"nodeId":       n.cfg.Node.ID,
+		"targetNodeId": targetNodeId,
+		"clientPubKey": clientPubKey,
+		"clientIP":     "10.200.0.2/32",
+	}
+	resp, err := n.discoveryRequest("POST", n.discoveryBaseURL()+"/connect-request", payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("connect request failed: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// cancelConnectRequest removes our pending connect request from the discovery worker.
+func (n *NodeService) cancelConnectRequest(targetNodeId string) error {
+	if n.cfg.API.Endpoint == "" {
+		return nil
+	}
+	payload := map[string]interface{}{
+		"nodeId":       n.cfg.Node.ID,
+		"targetNodeId": targetNodeId,
+	}
+	resp, err := n.discoveryRequest("DELETE", n.discoveryBaseURL()+"/connect-request", payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("cancel connect request failed: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+type pendingPeer struct {
+	NodeID       string `json:"nodeId"`
+	TargetNodeID string `json:"targetNodeId"`
+	ClientPubKey string `json:"clientPubKey"`
+	ClientIP     string `json:"clientIP"`
+}
+
+// checkPendingConnections polls the discovery worker for pending peers wanting to connect to us,
+// and adds their public keys to our WireGuard interface.
+func (n *NodeService) checkPendingConnections() {
+	if n.cfg.API.Endpoint == "" {
+		return
+	}
+	url := fmt.Sprintf("%s/pending-peers?nodeId=%s", n.discoveryBaseURL(), n.cfg.Node.ID)
+	resp, err := n.discoveryRequest("GET", url, nil)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var result struct {
+		Success bool          `json:"success"`
+		Peers   []pendingPeer `json:"peers"`
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return
+	}
+	if !result.Success {
+		return
+	}
+
+	for _, p := range result.Peers {
+		ifName, err := GetWGInterfaceName()
+		if err != nil {
+			n.addLog("warning", fmt.Sprintf("Cannot get WG interface for pending peer: %v", err))
+			continue
+		}
+		if err := n.wgManager.AddPeer(ifName, p.ClientPubKey, p.ClientIP); err != nil {
+			n.addLog("warning", fmt.Sprintf("Failed to add peer %s: %v", p.NodeID, err))
+			continue
+		}
+		n.addLog("info", fmt.Sprintf("Accepted connection from peer %s", p.NodeID))
+	}
 }
 
 func (n *NodeService) stopDiscoveryHeartbeat() {

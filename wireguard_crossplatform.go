@@ -102,21 +102,31 @@ func execWGSudo(args ...string) (string, error) {
 		return string(output), nil
 	}
 
-	for _, runner := range []string{"sudo", "doas", "pkexec"} {
+	var lastErr error
+	var lastOut string
+	for _, method := range [][]string{
+		{"sudo", wgPath},
+		{"doas", wgPath},
+		{"pkexec", wgPath},
+		{"systemd-run", "--uid=0", "--same-dir", "--collect", "--wait", "--", wgPath},
+	} {
+		runner := method[0]
 		if _, err := exec.LookPath(runner); err != nil {
 			continue
 		}
-		cmd := execCmd(runner, append([]string{wgPath}, args...)...)
+		cmdArgs := append(method[1:], args...)
+		cmd := execCmd(cmdArgs[0], cmdArgs[1:]...)
 		output, err := cmd.CombinedOutput()
+		lastErr = err
+		lastOut = string(output)
 		if err == nil {
 			return string(output), nil
 		}
-		if runner == "sudo" && strings.Contains(strings.TrimSpace(string(output)), "no new privileges") {
-			continue
-		}
-		return "", fmt.Errorf("wg command failed: %s (%w)", strings.TrimSpace(string(output)), err)
 	}
-	return "", fmt.Errorf("wg command requires root privileges but sudo/pkexec are unavailable")
+	if lastErr != nil {
+		return "", fmt.Errorf("wg command failed: %s (%w)", strings.TrimSpace(lastOut), lastErr)
+	}
+	return "", fmt.Errorf("wg command requires root privileges. Run 'sudo setcap cap_net_admin+ep $(which zoop-one)' or run the app as root")
 }
 
 // execWGQuick runs wg-quick, trying sudo first, then pkexec, or directly if root.
@@ -143,28 +153,36 @@ func execWGQuickSudo(action, configPath string) error {
 		return nil
 	}
 
-	// Try sudo, doas, then pkexec
-	for _, runner := range []string{"sudo", "doas", "pkexec"} {
+	var lastErr error
+	var lastOut string
+	for _, method := range [][]string{
+		{"sudo", "wg-quick", action, configPath},
+		{"doas", "wg-quick", action, configPath},
+		{"pkexec", "wg-quick", action, configPath},
+		{"systemd-run", "--uid=0", "--same-dir", "--collect", "--wait", "--", "wg-quick", action, configPath},
+	} {
+		runner := method[0]
 		if _, err := exec.LookPath(runner); err != nil {
 			continue
 		}
-		cmd := execCmd(runner, "wg-quick", action, configPath)
+		cmd := execCmd(method[0], method[1:]...)
 		output, err := cmd.CombinedOutput()
 		if err == nil {
 			return nil
 		}
+		lastErr = err
+		lastOut = string(output)
 		errStr := strings.TrimSpace(string(output))
+		// If tunnel is already down, that's fine
 		if action == "down" && (strings.Contains(errStr, "is not a WireGuard interface") ||
 			strings.Contains(errStr, "does not exist")) {
 			return nil
 		}
-		// If runner is sudo and the error is specifically about NoNewPrivileges, try next runner
-		if runner == "sudo" && strings.Contains(errStr, "no new privileges") {
-			continue
-		}
-		return fmt.Errorf("wg-quick %s failed: %s (%w)", action, errStr, err)
 	}
-	return fmt.Errorf("wg-quick %s requires root privileges but sudo/pkexec are unavailable", action)
+	if lastErr != nil {
+		return fmt.Errorf("wg-quick %s failed: %s (%w)", action, strings.TrimSpace(lastOut), lastErr)
+	}
+	return fmt.Errorf("wg-quick %s requires root privileges. Run 'sudo setcap cap_net_admin+ep $(which zoop-one)' or run the app as root", action)
 }
 
 func resolveWireGuardExe() (string, error) {
