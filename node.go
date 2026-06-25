@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"net/http"
@@ -85,6 +86,7 @@ type NodeService struct {
 	stopChan        chan struct{}
 	wgManager       WireGuardManager
 	connectedPeerID string // nodeId of the peer we are currently connected to
+	wireguardPort   int    // Unique port for this node to avoid conflicts
 }
 
 func NewNodeService() *NodeService {
@@ -936,6 +938,25 @@ func (n *NodeService) generateUniqueClientIP() (string, error) {
 	return "", fmt.Errorf("no available client IPs in the 10.200.0.0/24 range")
 }
 
+// calculateUniqueWireGuardPort calculates a unique port for each node to avoid conflicts
+// Uses a hash of the node ID to generate a port in the 51820-51920 range
+func (n *NodeService) calculateUniqueWireGuardPort() int {
+	hash := fnv.New32a()
+	hash.Write([]byte(n.cfg.Node.ID))
+	
+	// Use hash to get a value between 0-100 and add to base port
+	portOffset := int(hash.Sum32() % 101) // 0-100
+	basePort := 51820
+	uniquePort := basePort + portOffset
+	
+	// Ensure we don't exceed reasonable port range
+	if uniquePort > 51920 {
+		uniquePort = 51920
+	}
+	
+	return uniquePort
+}
+
 // waitForHandshakeCompletion polls the WireGuard interface to check if handshake with peer completed
 func (n *NodeService) waitForHandshakeCompletion(configPath, peerPubKey string) error {
 	// Extract interface name from config path
@@ -1388,7 +1409,13 @@ func (n *NodeService) startSharingTunnel() {
 		return
 	}
 
-	if err := CreateWGConfig(privKey, iface); err != nil {
+	// Use the unique port calculated earlier
+	uniquePort := n.wireguardPort
+	if uniquePort == 0 {
+		uniquePort = n.calculateUniqueWireGuardPort()
+	}
+	
+	if err := CreateWGConfig(privKey, iface, uniquePort); err != nil {
 		n.failTunnelStart(fmt.Errorf("failed to write Zoop tunnel configuration: %w", err), WGInfo{})
 		return
 	}
@@ -1445,9 +1472,15 @@ func (n *NodeService) startSharingTunnel() {
 		n.refreshPublicIP()
 		endpoint := n.telemetry.PublicIP
 		if endpoint != "" {
-			// Add node ID as a query parameter to make endpoint unique per device
-			// This helps with NAT traversal and device identification
-			endpoint = fmt.Sprintf("%s:51820?node=%s", endpoint, n.cfg.Node.ID)
+			// Calculate a unique port based on node ID hash to avoid conflicts
+			// This ensures each device behind the same NAT has a unique endpoint
+			uniquePort := n.calculateUniqueWireGuardPort()
+			endpoint = fmt.Sprintf("%s:%d", endpoint, uniquePort)
+			
+			// Store the port mapping for when we receive connections
+			n.mu.Lock()
+			n.wireguardPort = uniquePort
+			n.mu.Unlock()
 		}
 		if err := n.registerDiscovery(pubKey, endpoint); err != nil {
 			n.addLog("warning", fmt.Sprintf("Discovery registration failed: %v", err))

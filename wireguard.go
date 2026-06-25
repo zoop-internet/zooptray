@@ -157,7 +157,7 @@ PersistentKeepalive = 25
 }
 
 // CreateWGConfig generates a standard WireGuard config file for the sharing hotspot
-func CreateWGConfig(privateKey, preferredInterface string) error {
+func CreateWGConfig(privateKey, preferredInterface string, port int) error {
 	configPath, err := GetWGConfigPath()
 	if err != nil {
 		return err
@@ -182,26 +182,34 @@ func CreateWGConfig(privateKey, preferredInterface string) error {
 	switch runtime.GOOS {
 	case "linux":
 		// Linux uses iptables for NAT
+		listenPort := port
+		if listenPort == 0 {
+			listenPort = 51820 // Default port if not specified
+		}
 		content = fmt.Sprintf(`[Interface]
 PrivateKey = %s
-ListenPort = 51820
+ListenPort = %d
 Address = 10.200.0.1/24
 
 # Packet forwarding & NAT configuration
 PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE
 PostDown = iptables -D FORWARD -i %%i -j ACCEPT || true; iptables -D FORWARD -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || true; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE || true
-`, privateKey, preferredInterface, preferredInterface)
+`, privateKey, listenPort, preferredInterface, preferredInterface)
 	case "darwin":
 		// macOS uses pf for NAT
+		listenPort := port
+		if listenPort == 0 {
+			listenPort = 51820 // Default port if not specified
+		}
 		content = fmt.Sprintf(`[Interface]
 PrivateKey = %s
-ListenPort = 51820
+ListenPort = %d
 Address = 10.200.0.1/24
 
 # macOS NAT configuration using pf
 PostUp = echo "nat on %s from 10.200.0.0/24 to any -> (%s)" | pfctl -ef -
 PostDown = pfctl -F all -f /etc/pf.conf
-`, privateKey, preferredInterface, preferredInterface)
+`, privateKey, listenPort, preferredInterface, preferredInterface)
 	case "windows":
 		// Windows uses netsh for NAT (simplified - actual implementation may need admin setup)
 		content = fmt.Sprintf(`[Interface]
