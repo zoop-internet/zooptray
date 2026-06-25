@@ -97,7 +97,7 @@ func GetClientWGInterfaceName() (string, error) {
 }
 
 // CreateClientWGConfig generates a WireGuard client config to connect to a peer
-func CreateClientWGConfig(privateKey, peerPubKey, peerEndpoint string) error {
+func CreateClientWGConfig(privateKey, peerPubKey, peerEndpoint, clientIP string) error {
 	configPath, err := GetClientWGConfigPath()
 	if err != nil {
 		return err
@@ -105,9 +105,33 @@ func CreateClientWGConfig(privateKey, peerPubKey, peerEndpoint string) error {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
 	}
+	// Use provided client IP or default to 10.200.0.2/32
+	if clientIP == "" {
+		clientIP = "10.200.0.2/32"
+	}
+	
+	// Parse endpoint to separate host:port from query parameters
+	var cleanEndpoint, relayServer string
+	if strings.Contains(peerEndpoint, "?") {
+		parts := strings.Split(peerEndpoint, "?")
+		cleanEndpoint = parts[0]
+		// Check for relay parameter
+		if strings.Contains(peerEndpoint, "relay=") {
+			for _, param := range strings.Split(parts[1], "&") {
+				if strings.HasPrefix(param, "relay=") {
+					relayServer = strings.TrimPrefix(param, "relay=")
+					break
+				}
+			}
+		}
+	} else {
+		cleanEndpoint = peerEndpoint
+	}
+	
+	// Build config with primary endpoint and optional relay fallback
 	content := fmt.Sprintf(`[Interface]
 PrivateKey = %s
-Address = 10.200.0.2/32
+Address = %s
 DNS = 1.1.1.1
 
 [Peer]
@@ -115,7 +139,19 @@ PublicKey = %s
 Endpoint = %s
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
-`, privateKey, peerPubKey, peerEndpoint)
+`, privateKey, clientIP, peerPubKey, cleanEndpoint)
+	
+	// Add relay server as secondary peer if available
+	if relayServer != "" {
+		content += fmt.Sprintf(`
+
+[Peer]
+PublicKey = %s
+Endpoint = %s
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+`, peerPubKey, relayServer)
+	}
 
 	return os.WriteFile(configPath, []byte(content), 0600)
 }

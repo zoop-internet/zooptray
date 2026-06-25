@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -242,6 +244,8 @@ func (n *NodeService) runTelemetryLoop() {
 
 			if active {
 				n.checkPendingConnections()
+				n.checkDisconnectNotifications()
+				n.checkActiveClients()
 			}
 
 			var nextTelemetry Telemetry
@@ -457,12 +461,23 @@ func (n *NodeService) registerDiscovery(pubKey, endpoint string) error {
 
 	resp, err := n.discoveryRequest("POST", n.discoveryBaseURL()+"/register", payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("discovery registration request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	
+	// Read response body for better error diagnostics
+	body, _ := io.ReadAll(resp.Body)
+	
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("discovery registration failed: status %d", resp.StatusCode)
+		errorMsg := fmt.Sprintf("discovery registration failed: status %d", resp.StatusCode)
+		if len(body) > 0 {
+			errorMsg += fmt.Sprintf(", response: %s", string(body))
+		}
+		return fmt.Errorf(errorMsg)
 	}
+	
+	// Log successful registration
+	n.addLog("info", fmt.Sprintf("Successfully registered with discovery service at %s", n.discoveryBaseURL()))
 	return nil
 }
 
@@ -498,12 +513,23 @@ func (n *NodeService) heartbeatDiscovery() error {
 	}
 	resp, err := n.discoveryRequest("POST", n.discoveryBaseURL()+"/heartbeat", payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("discovery heartbeat request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	
+	// Read response body for better error diagnostics
+	body, _ := io.ReadAll(resp.Body)
+	
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("discovery heartbeat failed: status %d", resp.StatusCode)
+		errorMsg := fmt.Sprintf("discovery heartbeat failed: status %d", resp.StatusCode)
+		if len(body) > 0 {
+			errorMsg += fmt.Sprintf(", response: %s", string(body))
+		}
+		return fmt.Errorf(errorMsg)
 	}
+	
+	// Log successful heartbeat
+	n.addLog("debug", "Discovery heartbeat successful")
 	return nil
 }
 
@@ -651,6 +677,16 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 		return err
 	}
 
+	// Test connectivity and get best endpoint (direct or relay)
+	effectiveEndpoint, err := n.testPeerConnectivity(peer)
+	if err != nil {
+		n.addLog("error", fmt.Sprintf("Cannot establish connectivity to peer %s: %v", peer.NodeID, err))
+		return err
+	}
+	
+	// Update peer endpoint with the working one
+	peer.Endpoint = effectiveEndpoint
+
 	privKey, pubKey, err := GenerateWGKeypair()
 	if err != nil {
 		err = fmt.Errorf("failed to generate client keypair: %w", err)
@@ -659,7 +695,15 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 	}
 	n.addLog("info", fmt.Sprintf("Generated client keypair (public: %s)", pubKey))
 
-	if err := CreateClientWGConfig(privKey, peer.PublicKey, peer.Endpoint); err != nil {
+	// Generate a unique client IP for this connection
+	clientIP, err := n.generateUniqueClientIP()
+	if err != nil {
+		err = fmt.Errorf("failed to generate unique client IP: %w", err)
+		n.addLog("error", err.Error())
+		return err
+	}
+	
+	if err := CreateClientWGConfig(privKey, peer.PublicKey, peer.Endpoint, clientIP); err != nil {
 		err = fmt.Errorf("failed to create client WireGuard config: %w", err)
 		n.addLog("error", err.Error())
 		return err
@@ -678,10 +722,21 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 	}
 
 	// Register with the peer via the discovery worker so the peer adds us to its WG config
-	if err := n.sendConnectRequest(peer.NodeID, pubKey); err != nil {
+	if err := n.sendConnectRequest(peer.NodeID, pubKey, clientIP); err != nil {
 		n.addLog("warning", fmt.Sprintf("Failed to send connect request to discovery: %v", err))
-	} else {
-		n.addLog("info", "Sent connect request to peer via discovery service")
+		// Clean up the tunnel we just started
+		_ = n.wgManager.StopTunnel(configPath)
+		return fmt.Errorf("failed to send connect request: %w", err)
+	}
+	n.addLog("info", "Sent connect request to peer via discovery service")
+
+	// Wait for connection confirmation by checking if handshake completed
+	if err := n.waitForHandshakeCompletion(configPath, peer.PublicKey); err != nil {
+		n.addLog("warning", fmt.Sprintf("Connection handshake failed: %v", err))
+		// Clean up
+		_ = n.cancelConnectRequest(peer.NodeID)
+		_ = n.wgManager.StopTunnel(configPath)
+		return fmt.Errorf("connection handshake failed: %w", err)
 	}
 
 	n.mu.Lock()
@@ -691,8 +746,215 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 	n.telemetry.TunnelError = ""
 	n.mu.Unlock()
 
-	n.addLog("info", fmt.Sprintf("Connected to peer %s (%s)", peer.DisplayName, peer.Endpoint))
+	n.addLog("info", fmt.Sprintf("Successfully connected to peer %s (%s)", peer.DisplayName, peer.Endpoint))
 	return nil
+}
+
+// testPeerConnectivity tests if we can reach a peer directly and falls back to relay if needed
+func (n *NodeService) testPeerConnectivity(peer *DiscoveryPeer) (string, error) {
+	// First try direct connection
+	timeout := 5 * time.Second
+	conn, err := net.DialTimeout("udp", peer.Endpoint, timeout)
+	if err == nil {
+		conn.Close()
+		n.addLog("info", fmt.Sprintf("Direct connection to %s successful", peer.Endpoint))
+		return peer.Endpoint, nil
+	}
+	
+	n.addLog("warning", fmt.Sprintf("Direct connection to %s failed: %v", peer.Endpoint, err))
+	
+	// Try UDP hole punching by sending a discovery packet
+	if n.tryUDPHolePunching(peer) {
+		// Wait a moment for NAT tables to update
+		time.Sleep(1 * time.Second)
+		
+		// Try direct connection again
+		conn, err := net.DialTimeout("udp", peer.Endpoint, timeout)
+		if err == nil {
+			conn.Close()
+			n.addLog("info", fmt.Sprintf("UDP hole punching successful for %s", peer.Endpoint))
+			return peer.Endpoint, nil
+		}
+	}
+	
+	// If direct connection still fails, try to get a relay server from discovery service
+	relayEndpoint, err := n.requestRelayServer(peer.NodeID)
+	if err != nil {
+		return "", fmt.Errorf("direct connection and hole punching failed, no relay available: %w", err)
+	}
+	
+	if relayEndpoint != "" {
+		n.addLog("info", fmt.Sprintf("Using relay server %s for peer %s", relayEndpoint, peer.NodeID))
+		// Append relay parameter to original endpoint
+		return fmt.Sprintf("%s?relay=%s", peer.Endpoint, relayEndpoint), nil
+	}
+	
+	return "", fmt.Errorf("cannot connect to peer %s directly, via hole punching, or via relay", peer.NodeID)
+}
+
+// tryUDPHolePunching attempts to establish UDP connectivity through NAT
+func (n *NodeService) tryUDPHolePunching(peer *DiscoveryPeer) bool {
+	// Parse the peer endpoint
+	hostPort := strings.Split(peer.Endpoint, "?")[0] // Remove query params
+	host, portStr, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		n.addLog("warning", fmt.Sprintf("Invalid peer endpoint format: %v", err))
+		return false
+	}
+	
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		n.addLog("warning", fmt.Sprintf("Invalid peer port: %v", err))
+		return false
+	}
+	
+	// Create UDP connection
+	conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		n.addLog("debug", fmt.Sprintf("UDP hole punching dial failed: %v", err))
+		return false
+	}
+	defer conn.Close()
+	
+	// Set timeout
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	
+	// Send a small discovery packet
+	discoveryPacket := []byte("ZOOP_DISCOVER")
+	_, err = conn.Write(discoveryPacket)
+	if err != nil {
+		n.addLog("debug", fmt.Sprintf("UDP hole punching send failed: %v", err))
+		return false
+	}
+	
+	n.addLog("debug", fmt.Sprintf("Sent UDP hole punching packet to %s", peer.Endpoint))
+	return true
+}
+
+// requestRelayServer asks the discovery service for a relay server endpoint
+func (n *NodeService) requestRelayServer(targetNodeID string) (string, error) {
+	if n.cfg.API.Endpoint == "" {
+		return "", fmt.Errorf("discovery endpoint is not configured")
+	}
+	
+	url := fmt.Sprintf("%s/relay-request?target=%s", n.discoveryBaseURL(), targetNodeID)
+	resp, err := n.discoveryRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("relay request failed: status %d", resp.StatusCode)
+	}
+	
+	var result struct {
+		Success bool   `json:"success"`
+		Relay   string `json:"relay"`
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", err
+	}
+	if !result.Success || result.Relay == "" {
+		return "", fmt.Errorf("no relay server available")
+	}
+	
+	return result.Relay, nil
+}
+
+// generateUniqueClientIP generates a unique IP address for a connecting client
+func (n *NodeService) generateUniqueClientIP() (string, error) {
+	// Try to find an available IP in the 10.200.0.0/24 range
+	// Start from .3 and go up to .254 (avoid .1 for server, .2 for first client)
+	
+	baseIP := "10.200.0."
+	
+	// Check existing peers to avoid conflicts
+	ifName, err := GetWGInterfaceName()
+	if err != nil {
+		// If we can't get the interface, just use a default
+		return "10.200.0.2/32", nil
+	}
+	
+	peersOutput, err := n.wgManager.GetPeers(ifName)
+	if err != nil {
+		// If we can't get peers, just use a default
+		return "10.200.0.2/32", nil
+	}
+	
+	// Parse existing peer IPs
+	existingIPs := make(map[string]bool)
+	scanner := bufio.NewScanner(strings.NewReader(peersOutput))
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.Split(line, "\t")
+		if len(parts) >= 4 {
+			// allowedIPs field contains the client IP
+			allowedIPs := parts[3]
+			if strings.Contains(allowedIPs, "10.200.0.") {
+				// Extract the IP (format: 10.200.0.x/32)
+				ipPart := strings.Split(allowedIPs, "/")[0]
+				existingIPs[ipPart] = true
+			}
+		}
+	}
+	
+	// Find first available IP starting from .3
+	for i := 3; i <= 254; i++ {
+		testIP := fmt.Sprintf("%s%d/32", baseIP, i)
+		ipWithoutMask := fmt.Sprintf("%s%d", baseIP, i)
+		if !existingIPs[ipWithoutMask] {
+			return testIP, nil
+		}
+	}
+	
+	return "", fmt.Errorf("no available client IPs in the 10.200.0.0/24 range")
+}
+
+// waitForHandshakeCompletion polls the WireGuard interface to check if handshake with peer completed
+func (n *NodeService) waitForHandshakeCompletion(configPath, peerPubKey string) error {
+	// Extract interface name from config path
+	ifName := strings.TrimSuffix(filepath.Base(configPath), ".conf")
+	
+	// Try for up to 10 seconds (5 attempts, 2 seconds apart)
+	for i := 0; i < 5; i++ {
+		if i > 0 {
+			// Wait before retrying
+			time.Sleep(2 * time.Second)
+		}
+		
+		// Check if handshake completed
+		peersOutput, err := n.wgManager.GetPeers(ifName)
+		if err != nil {
+			continue // Try again
+		}
+		
+		// Parse the output to check for handshake
+		hasHandshake := false
+		scanner := bufio.NewScanner(strings.NewReader(peersOutput))
+		for scanner.Scan() {
+			line := scanner.Text()
+			// WireGuard dump format: <pubkey>\t<presharedkey>\t<endpoint>\t<allowedips>\t<latesthandshaketime>\t<rx>\t<tx>\t<persistentkeepalive>
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 5 && parts[0] == peerPubKey {
+				// Check if latest handshake time is non-zero
+				if parts[4] != "0" {
+					hasHandshake = true
+					break
+				}
+			}
+		}
+		
+		if hasHandshake {
+			return nil // Success!
+		}
+	}
+	
+	return fmt.Errorf("handshake with peer %s did not complete within timeout", peerPubKey)
 }
 
 // DisconnectFromPeer stops the client WireGuard tunnel
@@ -704,7 +966,37 @@ func (n *NodeService) DisconnectFromPeer() error {
 	n.connectedPeerID = ""
 	n.mu.Unlock()
 
+	// Get our client public key to notify the target node
+	clientPubKey := ""
 	if targetID != "" {
+		configPath, _ := GetClientWGConfigPath()
+		if configPath != "" {
+			// Read the client config to get our public key
+			if content, err := os.ReadFile(configPath); err == nil {
+				scanner := bufio.NewScanner(strings.NewReader(string(content)))
+				for scanner.Scan() {
+					line := strings.TrimSpace(scanner.Text())
+					if strings.HasPrefix(line, "PrivateKey =") {
+						privKey := strings.TrimPrefix(line, "PrivateKey =")
+						privKey = strings.TrimSpace(privKey)
+						if pubKey, err := DerivePublicKey(privKey); err == nil {
+							clientPubKey = pubKey
+							break
+						}
+					}
+				}
+			}
+		}
+		
+		// Notify target node to remove us from their config
+		if clientPubKey != "" {
+			if err := n.sendDisconnectNotification(targetID, clientPubKey); err != nil {
+				n.addLog("warning", fmt.Sprintf("Failed to send disconnect notification to peer: %v", err))
+			} else {
+				n.addLog("info", "Sent disconnect notification to peer.")
+			}
+		}
+		
 		if err := n.cancelConnectRequest(targetID); err != nil {
 			n.addLog("warning", fmt.Sprintf("Failed to cancel connect request: %v", err))
 		} else {
@@ -728,9 +1020,110 @@ func (n *NodeService) DisconnectFromPeer() error {
 	return nil
 }
 
-// sendConnectRequest tells the discovery worker that we (nodeId) want to connect to targetNodeId.
-// The target node will pick this up on its next poll and add our public key to its WireGuard config.
-func (n *NodeService) sendConnectRequest(targetNodeId, clientPubKey string) error {
+// checkActiveClients monitors connected clients and removes stale ones
+func (n *NodeService) checkActiveClients() {
+	ifName, err := GetWGInterfaceName()
+	if err != nil {
+		n.addLog("debug", fmt.Sprintf("Cannot get WG interface for client monitoring: %v", err))
+		return
+	}
+	
+	peersOutput, err := n.wgManager.GetPeers(ifName)
+	if err != nil {
+		n.addLog("debug", fmt.Sprintf("Cannot get peers for monitoring: %v", err))
+		return
+	}
+	
+	// Parse active peers and their last handshake times
+	activePeers := make(map[string]bool) // pubkey -> active
+	scanner := bufio.NewScanner(strings.NewReader(peersOutput))
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.Split(line, "\t")
+		if len(parts) >= 5 {
+			pubKey := parts[0]
+			handshakeTime := parts[4]
+			
+			// Consider active if handshake was within last 30 seconds
+			if handshakeTime != "0" {
+				if handshakeSec, err := strconv.ParseInt(handshakeTime, 10, 64); err == nil {
+					currentTime := time.Now().Unix()
+					if currentTime-handshakeSec < 30 {
+						activePeers[pubKey] = true
+					}
+				}
+			}
+		}
+	}
+	
+	// Remove inactive peers
+	n.mu.Lock()
+	var activeClients []ClientInfo
+	for _, client := range n.clients {
+		if activePeers[client.IP] { // Using IP as proxy for pubkey in this context
+			activeClients = append(activeClients, client)
+		} else {
+			n.addLog("info", fmt.Sprintf("Removed stale client: %s (%s)", client.Name, client.IP))
+		}
+	}
+	n.clients = activeClients
+	n.mu.Unlock()
+	
+	if n.ctx != nil {
+		wailsRuntime.EventsEmit(n.ctx, "clients_updated", n.clients)
+	}
+}
+
+// checkDisconnectNotifications polls for clients that have disconnected from us
+func (n *NodeService) checkDisconnectNotifications() {
+	if n.cfg.API.Endpoint == "" {
+		return
+	}
+	url := fmt.Sprintf("%s/disconnect-notifications?nodeId=%s", n.discoveryBaseURL(), n.cfg.Node.ID)
+	resp, err := n.discoveryRequest("GET", url, nil)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var result struct {
+		Success     bool          `json:"success"`
+		Disconnects []struct {
+			NodeID       string `json:"nodeId"`
+			ClientPubKey string `json:"clientPubKey"`
+		} `json:"disconnects"`
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return
+	}
+	if !result.Success {
+		return
+	}
+
+	ifName, err := GetWGInterfaceName()
+	if err != nil {
+		n.addLog("warning", fmt.Sprintf("Cannot get WG interface for disconnect processing: %v", err))
+		return
+	}
+
+	for _, d := range result.Disconnects {
+		if err := n.wgManager.RemovePeer(ifName, d.ClientPubKey); err != nil {
+			n.addLog("warning", fmt.Sprintf("Failed to remove disconnected peer %s: %v", d.NodeID, err))
+		} else {
+			n.addLog("info", fmt.Sprintf("Removed peer %s who disconnected from us", d.NodeID))
+		}
+	}
+}
+
+// sendDisconnectNotification tells the target peer to remove us from their WireGuard config
+func (n *NodeService) sendDisconnectNotification(targetNodeId, clientPubKey string) error {
 	if n.cfg.API.Endpoint == "" {
 		return fmt.Errorf("discovery endpoint is not configured")
 	}
@@ -738,7 +1131,29 @@ func (n *NodeService) sendConnectRequest(targetNodeId, clientPubKey string) erro
 		"nodeId":       n.cfg.Node.ID,
 		"targetNodeId": targetNodeId,
 		"clientPubKey": clientPubKey,
-		"clientIP":     "10.200.0.2/32",
+	}
+	resp, err := n.discoveryRequest("POST", n.discoveryBaseURL()+"/disconnect-notification", payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("disconnect notification failed: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// sendConnectRequest tells the discovery worker that we (nodeId) want to connect to targetNodeId.
+// The target node will pick this up on its next poll and add our public key to its WireGuard config.
+func (n *NodeService) sendConnectRequest(targetNodeId, clientPubKey, clientIP string) error {
+	if n.cfg.API.Endpoint == "" {
+		return fmt.Errorf("discovery endpoint is not configured")
+	}
+	payload := map[string]interface{}{
+		"nodeId":       n.cfg.Node.ID,
+		"targetNodeId": targetNodeId,
+		"clientPubKey": clientPubKey,
+		"clientIP":     clientIP,
 	}
 	resp, err := n.discoveryRequest("POST", n.discoveryBaseURL()+"/connect-request", payload)
 	if err != nil {
@@ -1009,7 +1424,9 @@ func (n *NodeService) startSharingTunnel() {
 		n.refreshPublicIP()
 		endpoint := n.telemetry.PublicIP
 		if endpoint != "" {
-			endpoint = fmt.Sprintf("%s:51820", endpoint)
+			// Add node ID as a query parameter to make endpoint unique per device
+			// This helps with NAT traversal and device identification
+			endpoint = fmt.Sprintf("%s:51820?node=%s", endpoint, n.cfg.Node.ID)
 		}
 		if err := n.registerDiscovery(pubKey, endpoint); err != nil {
 			n.addLog("warning", fmt.Sprintf("Discovery registration failed: %v", err))

@@ -114,13 +114,25 @@ func execWGSudo(args ...string) (string, error) {
 		if _, err := exec.LookPath(runner); err != nil {
 			continue
 		}
-		cmdArgs := append(method[1:], args...)
-		cmd := execCmd(cmdArgs[0], cmdArgs[1:]...)
-		output, err := cmd.CombinedOutput()
-		lastErr = err
-		lastOut = string(output)
-		if err == nil {
-			return string(output), nil
+		// For systemd-run, we need to handle the command differently
+		if runner == "systemd-run" {
+			cmdArgs := append(method[1:], args...)
+			cmd := execCmd("systemd-run", cmdArgs...)
+			output, err := cmd.CombinedOutput()
+			lastErr = err
+			lastOut = string(output)
+			if err == nil {
+				return string(output), nil
+			}
+		} else {
+			cmdArgs := append(method[1:], args...)
+			cmd := execCmd(runner, cmdArgs...)
+			output, err := cmd.CombinedOutput()
+			lastErr = err
+			lastOut = string(output)
+			if err == nil {
+				return string(output), nil
+			}
 		}
 	}
 	if lastErr != nil {
