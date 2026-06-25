@@ -387,7 +387,12 @@ func (n *NodeService) saveConfigBackground(cfg *Config) {
 }
 
 func (n *NodeService) discoveryBaseURL() string {
-	return strings.TrimRight(n.cfg.API.Endpoint, "/")
+	url := strings.TrimRight(n.cfg.API.Endpoint, "/")
+	// Ensure the URL starts with https://
+	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+		url = "https://" + url
+	}
+	return url
 }
 
 func (n *NodeService) discoveryRequest(method, url string, payload interface{}) (*http.Response, error) {
@@ -395,19 +400,31 @@ func (n *NodeService) discoveryRequest(method, url string, payload interface{}) 
 	if payload != nil {
 		raw, err := json.Marshal(payload)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to marshal payload: %w", err)
 		}
 		body = bytes.NewReader(raw)
 	}
 
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
-		return nil, err
+		// Check if this is a DNS resolution error
+		if strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "lookup") {
+			return nil, fmt.Errorf("discovery service DNS resolution failed: %v. Please check your internet connection and that the discovery URL %s is correct", err, n.discoveryBaseURL())
+		}
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	return client.Do(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		// Check for DNS errors in the response
+		if strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "lookup") {
+			return nil, fmt.Errorf("discovery service DNS resolution failed: %v. Please check your internet connection and that the discovery URL %s is correct", err, n.discoveryBaseURL())
+		}
+		return nil, fmt.Errorf("discovery request failed: %w", err)
+	}
+	return resp, nil
 }
 
 func (n *NodeService) refreshPublicIP() {
@@ -447,7 +464,11 @@ func (n *NodeService) registerDiscovery(pubKey, endpoint string) error {
 		return nil
 	}
 	if n.cfg.API.Endpoint == "" {
-		return fmt.Errorf("discovery endpoint is not configured")
+		return fmt.Errorf("discovery endpoint is not configured. Please set api.endpoint in your config")
+	}
+	// Validate the endpoint URL
+	if !strings.Contains(n.cfg.API.Endpoint, "zoop") && !strings.Contains(n.cfg.API.Endpoint, "localhost") && !strings.HasPrefix(n.cfg.API.Endpoint, "http") {
+		return fmt.Errorf("discovery endpoint %s appears to be misconfigured. Expected format: https://your-discovery-worker.workers.dev", n.cfg.API.Endpoint)
 	}
 
 	payload := map[string]interface{}{

@@ -108,7 +108,7 @@ func execWGSudo(args ...string) (string, error) {
 		{"sudo", wgPath},
 		{"doas", wgPath},
 		{"pkexec", wgPath},
-		{"systemd-run", "--uid=0", "--same-dir", "--collect", "--wait", "--", wgPath},
+		{"systemd-run", "--uid=0", "--same-dir", "--collect", "--wait", "--", "env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", wgPath},
 	} {
 		runner := method[0]
 		if _, err := exec.LookPath(runner); err != nil {
