@@ -519,6 +519,20 @@ func (n *NodeService) getWGPubKey() string {
 	return pubKey
 }
 
+func (n *NodeService) isSelfPeer(peer *DiscoveryPeer) bool {
+	if peer == nil {
+		return false
+	}
+	if peer.NodeID == n.cfg.Node.ID {
+		return true
+	}
+	ourPubKey := n.getWGPubKey()
+	if ourPubKey != "" && peer.PublicKey == ourPubKey {
+		return true
+	}
+	return false
+}
+
 func (n *NodeService) unregisterDiscovery() error {
 	if !n.cfg.Node.IsPublic {
 		return nil
@@ -631,12 +645,8 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 		return err
 	}
 
-	peerHost := peer.Endpoint
-	if idx := strings.LastIndex(peerHost, ":"); idx > 0 {
-		peerHost = peerHost[:idx]
-	}
-	if localIP, _ := fetchPublicIP(); localIP != "" && peerHost == localIP {
-		err := fmt.Errorf("cannot connect to your own node (%s). Connect to another machine's node instead", peerHost)
+	if n.isSelfPeer(peer) {
+		err := fmt.Errorf("cannot connect to your own node (%s)", peer.Endpoint)
 		n.addLog("error", err.Error())
 		return err
 	}
