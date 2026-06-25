@@ -102,7 +102,7 @@ func execWGSudo(args ...string) (string, error) {
 		return string(output), nil
 	}
 
-	for _, runner := range []string{"sudo", "pkexec"} {
+	for _, runner := range []string{"sudo", "doas", "pkexec"} {
 		if _, err := exec.LookPath(runner); err != nil {
 			continue
 		}
@@ -143,8 +143,8 @@ func execWGQuickSudo(action, configPath string) error {
 		return nil
 	}
 
-	// Try sudo, then fall back to pkexec
-	for _, runner := range []string{"sudo", "pkexec"} {
+	// Try sudo, doas, then pkexec
+	for _, runner := range []string{"sudo", "doas", "pkexec"} {
 		if _, err := exec.LookPath(runner); err != nil {
 			continue
 		}
