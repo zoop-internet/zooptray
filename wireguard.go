@@ -109,7 +109,6 @@ func CreateClientWGConfig(privateKey, peerPubKey, peerEndpoint string) error {
 PrivateKey = %s
 Address = 10.200.0.2/32
 DNS = 1.1.1.1
-ListenPort = 51820
 
 [Peer]
 PublicKey = %s
