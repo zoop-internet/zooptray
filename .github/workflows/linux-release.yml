@@ -68,6 +68,10 @@ jobs:
           PKG_NAME="zoop-one"
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
+          # Fallback to timestamp if version is not semver (e.g. branch name)
+          if ! [[ "$VERSION" =~ ^[0-9] ]]; then
+            VERSION="0.0.0-$(date +%Y%m%d%H%M%S)"
+          fi
           DEB_DIR="release/deb/${PKG_NAME}_${VERSION}_amd64"
 
           mkdir -p "${DEB_DIR}/DEBIAN"
