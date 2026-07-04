@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
@@ -263,5 +266,132 @@ func TestP2PNodeSetCallbacks(t *testing.T) {
 	node.SetOnDisconnectReq(func(id peer.ID, msg P2PDisconnectMsg) {})
 	if node.onDisconnectReq == nil {
 		t.Fatal("onDisconnectReq callback not set")
+	}
+}
+
+func TestP2PAutoConnectIntegration(t *testing.T) {
+	homeA := t.TempDir()
+	homeB := t.TempDir()
+
+	var (
+		mu         sync.Mutex
+		connectCh  = make(chan P2PConnectReq, 1)
+		disconnCh  = make(chan P2PDisconnectMsg, 1)
+		peerFoundA = make(chan peer.ID, 1)
+	)
+
+	t.Setenv("HOME", homeA)
+	nodeA := NewP2PNode(func(level, msg string) {
+		t.Logf("[nodeA %s] %s", level, msg)
+	})
+	nodeA.SetOnPeerFound(func(id peer.ID, addrs []multiaddr.Multiaddr) {
+		select {
+		case peerFoundA <- id:
+		default:
+		}
+	})
+
+	if err := nodeA.Start(); err != nil {
+		t.Fatalf("nodeA Start() error = %v", err)
+	}
+	defer nodeA.Stop()
+
+	t.Setenv("HOME", homeB)
+	nodeB := NewP2PNode(func(level, msg string) {
+		t.Logf("[nodeB %s] %s", level, msg)
+	})
+	nodeB.SetOnConnectReq(func(pid peer.ID, req P2PConnectReq) {
+		mu.Lock()
+		defer mu.Unlock()
+		t.Logf("nodeB got connect request from %s: nodeID=%s pubkey=%s", pid, req.NodeID, req.ClientPubKey)
+		select {
+		case connectCh <- req:
+		default:
+		}
+	})
+	nodeB.SetOnDisconnectReq(func(pid peer.ID, msg P2PDisconnectMsg) {
+		mu.Lock()
+		defer mu.Unlock()
+		t.Logf("nodeB got disconnect from %s: nodeID=%s pubkey=%s", pid, msg.NodeID, msg.ClientPubKey)
+		select {
+		case disconnCh <- msg:
+		default:
+		}
+	})
+
+	if err := nodeB.Start(); err != nil {
+		t.Fatalf("nodeB Start() error = %v", err)
+	}
+	defer nodeB.Stop()
+
+	// Connect nodeA to nodeB directly using nodeB's addresses
+	bAddrs := nodeB.Addrs()
+	if len(bAddrs) == 0 {
+		t.Fatal("nodeB has no addresses")
+	}
+
+	pi := peer.AddrInfo{
+		ID:    nodeB.PeerID(),
+		Addrs: bAddrs,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := nodeA.host.Connect(ctx, pi); err != nil {
+		t.Fatalf("nodeA connect to nodeB: %v", err)
+	}
+	t.Log("nodeA connected to nodeB directly")
+
+	// nodeA sends connect request to nodeB
+	req := P2PConnectReq{
+		NodeID:       "test-node-a",
+		ClientPubKey: "aGVsbG8=",
+		ClientIP:     "10.200.0.2/32",
+		DisplayName:  "Test Node A",
+	}
+
+	resp, err := nodeA.SendConnectRequest(nodeB.PeerID(), req)
+	if err != nil {
+		t.Fatalf("SendConnectRequest: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("connect response success=false: %s", resp.Error)
+	}
+	t.Logf("Connect response: ServerPubKey=%s ServerIP=%s", resp.ServerPubKey, resp.ServerIP)
+
+	select {
+	case received := <-connectCh:
+		if received.NodeID != "test-node-a" {
+			t.Fatalf("connect request nodeID = %q, want %q", received.NodeID, "test-node-a")
+		}
+		if received.ClientPubKey != "aGVsbG8=" {
+			t.Fatalf("connect request pubkey = %q, want %q", received.ClientPubKey, "aGVsbG8=")
+		}
+		t.Log("nodeB correctly received connect request")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for connect request on nodeB")
+	}
+
+	// nodeA sends disconnect to nodeB
+	disMsg := P2PDisconnectMsg{
+		NodeID:       "test-node-a",
+		ClientPubKey: "aGVsbG8=",
+	}
+
+	if err := nodeA.SendDisconnectMessage(nodeB.PeerID(), disMsg); err != nil {
+		t.Fatalf("SendDisconnectMessage: %v", err)
+	}
+
+	select {
+	case received := <-disconnCh:
+		if received.NodeID != "test-node-a" {
+			t.Fatalf("disconnect nodeID = %q, want %q", received.NodeID, "test-node-a")
+		}
+		if received.ClientPubKey != "aGVsbG8=" {
+			t.Fatalf("disconnect pubkey = %q, want %q", received.ClientPubKey, "aGVsbG8=")
+		}
+		t.Log("nodeB correctly received disconnect message")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for disconnect message on nodeB")
 	}
 }
