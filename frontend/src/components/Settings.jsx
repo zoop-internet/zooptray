@@ -188,17 +188,21 @@ export default function Settings({ config, interfaces, onSaveConfig }) {
             onChange={v => setHeartbeat(parseInt(v, 10))}
             options={heartbeatOptions}
           />
-          <span className="settings-desc">How often to send a keepalive ping to the Zoop coordinator API. Lower = more responsive, higher = less network overhead.</span>
+          <span className="settings-desc">How often to re-advertise on the P2P DHT mesh. Lower = more responsive, higher = less network overhead.</span>
         </div>
 
         <div className="settings-group">
-          <label>API Endpoint</label>
+          <label>Discovery Mode</label>
           <input type="text" className="settings-input"
-            value={config?.api?.endpoint || 'https://api.zoopnetwork.com/v1'}
+            value={config?.p2p?.enabled ? 'P2P DHT Mesh (Zero-Infrastructure)' : 'Cloudflare Worker'}
             readOnly
             style={{ opacity: 0.6, cursor: 'not-allowed' }}
           />
-          <span className="settings-desc">Central coordinator endpoint (read-only in this release).</span>
+          <span className="settings-desc">
+            {config?.p2p?.enabled 
+              ? 'Using libp2p DHT mesh for peer discovery. No central server required.' 
+              : 'Using legacy Cloudflare Worker for discovery.'}
+          </span>
         </div>
       </div>
 

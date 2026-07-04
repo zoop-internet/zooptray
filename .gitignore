@@ -28,3 +28,6 @@ linux_installer/zoop-one
 
 # Wrangler CLI cache
 .wrangler/
+
+# Generated P2P identity key
+.zoop/p2p.key

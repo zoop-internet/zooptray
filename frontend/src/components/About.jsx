@@ -64,10 +64,12 @@ export default function About({ config, logs }) {
 
         <div className="form-row">
           <div className="form-row-left">
-            <span className="form-row-label">API Gateway</span>
-            <span className="form-row-desc">Endpoint address of the central coordinator.</span>
+            <span className="form-row-label">Discovery Mode</span>
+            <span className="form-row-desc">How peers discover each other on the network.</span>
           </div>
-          <span className="meta-value" style={{ fontSize: '11px' }}>{config?.api.endpoint || 'https://api.zoopnetwork.com'}</span>
+          <span className="meta-value" style={{ fontSize: '11px' }}>
+            {config?.p2p?.enabled ? 'P2P DHT Mesh (libp2p)' : 'Cloudflare Worker'}
+          </span>
         </div>
       </div>
 

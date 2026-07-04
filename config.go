@@ -32,11 +32,19 @@ type ApiConfig struct {
 	HeartbeatIntervalSeconds int    `json:"heartbeatIntervalSeconds"`
 }
 
+type P2PConfig struct {
+	Enabled            bool     `json:"enabled"`
+	BootstrapPeers     []string `json:"bootstrapPeers"`
+	RendezvousNamespace string  `json:"rendezvousNamespace"`
+	ListenPort         int      `json:"listenPort"`
+}
+
 type Config struct {
 	Node    NodeConfig    `json:"node"`
 	Sharing SharingConfig `json:"sharing"`
 	System  SystemConfig  `json:"system"`
 	API     ApiConfig     `json:"api"`
+	P2P     P2PConfig     `json:"p2p"`
 }
 
 // GetConfigPath returns the platform-independent path to config.json.
@@ -76,6 +84,12 @@ func GetDefaultConfig() *Config {
 		API: ApiConfig{
 			Endpoint:                 "https://zoop-peer-discovery.allan-info-comp.workers.dev",
 			HeartbeatIntervalSeconds: 15,
+		},
+		P2P: P2PConfig{
+			Enabled:             true,
+			BootstrapPeers:      BootstrapAddresses(),
+			RendezvousNamespace: RendezvousNamespace,
+			ListenPort:          0,
 		},
 	}
 }

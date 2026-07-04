@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -85,7 +88,9 @@ type NodeService struct {
 	discoveryCancel context.CancelFunc
 	stopChan        chan struct{}
 	wgManager       WireGuardManager
+	p2p             *P2PNode
 	connectedPeerID string // nodeId of the peer we are currently connected to
+	connectedP2PID  peer.ID
 	wireguardPort   int    // Unique port for this node to avoid conflicts
 }
 
@@ -108,6 +113,45 @@ func NewNodeServiceWithManager(manager WireGuardManager) *NodeService {
 		wgManager:    manager,
 	}
 
+	service.p2p = NewP2PNode(func(level, msg string) {
+		service.addLog(level, msg)
+	})
+
+	service.p2p.SetOnPeerFound(func(pid peer.ID, addrs []multiaddr.Multiaddr) {
+		service.addLog("info", fmt.Sprintf("P2P peer discovered: %s", pid))
+		if service.ctx != nil {
+			wailsRuntime.EventsEmit(service.ctx, "peer_discovered", pid.String())
+		}
+	})
+
+	service.p2p.SetOnConnectReq(func(pid peer.ID, req P2PConnectReq) {
+		service.addLog("info", fmt.Sprintf("P2P connect request from %s (node: %s)", pid, req.NodeID))
+		ifName, err := GetWGInterfaceName()
+		if err != nil {
+			service.addLog("warning", fmt.Sprintf("Cannot get WG interface: %v", err))
+			return
+		}
+		if err := service.wgManager.AddPeer(ifName, req.ClientPubKey, req.ClientIP); err != nil {
+			service.addLog("warning", fmt.Sprintf("Failed to add peer %s: %v", req.NodeID, err))
+			return
+		}
+		service.addLog("info", fmt.Sprintf("Accepted connection from peer %s via P2P", req.NodeID))
+	})
+
+	service.p2p.SetOnDisconnectReq(func(pid peer.ID, msg P2PDisconnectMsg) {
+		service.addLog("info", fmt.Sprintf("P2P disconnect from %s (node: %s)", pid, msg.NodeID))
+		ifName, err := GetWGInterfaceName()
+		if err != nil {
+			service.addLog("warning", fmt.Sprintf("Cannot get WG interface: %v", err))
+			return
+		}
+		if err := service.wgManager.RemovePeer(ifName, msg.ClientPubKey); err != nil {
+			service.addLog("warning", fmt.Sprintf("Failed to remove peer %s: %v", msg.NodeID, err))
+		} else {
+			service.addLog("info", fmt.Sprintf("Removed peer %s who disconnected", msg.NodeID))
+		}
+	})
+
 	// Add initial logs
 	service.addLog("info", "Zoop One Service Initialized.")
 	service.addLog("info", fmt.Sprintf("Identity Key paired. Display Name: %s", cfg.Node.DisplayName))
@@ -115,6 +159,12 @@ func NewNodeServiceWithManager(manager WireGuardManager) *NodeService {
 		service.addLog("info", "Sharing is enabled in config; tunnel will be started on launch.")
 	} else {
 		service.addLog("warning", "Node sharing is currently disabled by policy.")
+	}
+
+	if cfg.P2P.Enabled {
+		service.addLog("info", "P2P discovery mode enabled (zero-infrastructure).")
+	} else {
+		service.addLog("info", fmt.Sprintf("Using Cloudflare discovery endpoint: %s", cfg.API.Endpoint))
 	}
 
 	return service
@@ -139,6 +189,16 @@ func (n *NodeService) Startup(ctx context.Context) {
 		n.addLog("info", "WireGuard dependencies are ready.")
 	}
 
+	// Start P2P node if enabled
+	if n.cfg.P2P.Enabled {
+		if err := n.p2p.Start(); err != nil {
+			n.addLog("error", fmt.Sprintf("Failed to start P2P node: %v", err))
+		} else {
+			n.addLog("info", "P2P node started successfully.")
+			n.addLog("info", fmt.Sprintf("Peer ID: %s", n.p2p.PeerID()))
+		}
+	}
+
 	go n.runTelemetryLoop()
 	if n.cfg.Sharing.Enabled {
 		go n.startSharingTunnel()
@@ -149,12 +209,18 @@ func (n *NodeService) Startup(ctx context.Context) {
 func (n *NodeService) Shutdown(ctx context.Context) {
 	close(n.stopChan)
 
-	// Stop any active discovery heartbeat and unregister from public discovery.
-	n.stopDiscoveryHeartbeat()
-	if err := n.unregisterDiscovery(); err != nil {
-		n.addLog("warning", fmt.Sprintf("Failed to unregister from discovery during shutdown: %v", err))
+	// Stop P2P node
+	if n.cfg.P2P.Enabled {
+		n.p2p.Stop()
+		n.addLog("info", "P2P node stopped during shutdown.")
 	} else {
-		n.addLog("info", "Unregistered from Cloudflare discovery during shutdown.")
+		// Legacy: stop discovery heartbeat and unregister from Cloudflare
+		n.stopDiscoveryHeartbeat()
+		if err := n.unregisterDiscovery(); err != nil {
+			n.addLog("warning", fmt.Sprintf("Failed to unregister from discovery during shutdown: %v", err))
+		} else {
+			n.addLog("info", "Unregistered from Cloudflare discovery during shutdown.")
+		}
 	}
 
 	configPath, err := GetWGConfigPath()
@@ -245,9 +311,13 @@ func (n *NodeService) runTelemetryLoop() {
 			n.mu.Unlock()
 
 			if active {
-				n.checkPendingConnections()
-				n.checkDisconnectNotifications()
-				n.checkActiveClients()
+				if n.cfg.P2P.Enabled {
+					n.checkActiveClients()
+				} else {
+					n.checkPendingConnections()
+					n.checkDisconnectNotifications()
+					n.checkActiveClients()
+				}
 			}
 
 			var nextTelemetry Telemetry
@@ -323,14 +393,17 @@ func (n *NodeService) runTelemetryLoop() {
 
 			if deactivateTunnel {
 				go n.saveConfigBackground(cfg)
-				// Stop discovery heartbeat and unregister so this node
-				// doesn't appear as available when the tunnel is broken.
 				go func() {
-					n.stopDiscoveryHeartbeat()
-					if err := n.unregisterDiscovery(); err != nil {
-						n.addLog("warning", fmt.Sprintf("Failed to unregister after tunnel failure: %v", err))
+					if n.cfg.P2P.Enabled {
+						n.p2p.StopAdvertising()
+						n.addLog("info", "Stopped P2P advertising after tunnel failure.")
 					} else {
-						n.addLog("info", "Unregistered from discovery after tunnel failure.")
+						n.stopDiscoveryHeartbeat()
+						if err := n.unregisterDiscovery(); err != nil {
+							n.addLog("warning", fmt.Sprintf("Failed to unregister after tunnel failure: %v", err))
+						} else {
+							n.addLog("info", "Unregistered from discovery after tunnel failure.")
+						}
 					}
 				}()
 			}
@@ -520,7 +593,7 @@ func (n *NodeService) registerDiscovery(pubKey, endpoint string) error {
 		if len(body) > 0 {
 			errorMsg += fmt.Sprintf(", response: %s", string(body))
 		}
-		return fmt.Errorf(errorMsg)
+		return fmt.Errorf("%s", errorMsg)
 	}
 	
 	// Log successful registration
@@ -572,7 +645,7 @@ func (n *NodeService) heartbeatDiscovery() error {
 		if len(body) > 0 {
 			errorMsg += fmt.Sprintf(", response: %s", string(body))
 		}
-		return fmt.Errorf(errorMsg)
+		return errors.New(errorMsg)
 	}
 	
 	// Log successful heartbeat
@@ -629,6 +702,30 @@ func (n *NodeService) unregisterDiscovery() error {
 }
 
 func (n *NodeService) DiscoverPeers() ([]DiscoveryPeer, error) {
+	if n.cfg.P2P.Enabled {
+		n.addLog("info", "Discovering peers via P2P DHT mesh...")
+		p2pPeers, err := n.p2p.DiscoverPeersWithTimeout(discoveryTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("P2P discovery failed: %w", err)
+		}
+
+		var peers []DiscoveryPeer
+		for _, pp := range p2pPeers {
+			peers = append(peers, DiscoveryPeer{
+				NodeID:      string(pp.ID),
+				DisplayName: pp.DisplayName,
+				Endpoint:    pp.WGEndpoint,
+				PublicKey:   pp.WGPubKey,
+				Region:      "global",
+				IsPublic:    true,
+				UpdatedAt:   time.Now().Unix(),
+			})
+		}
+		n.addLog("info", fmt.Sprintf("P2P discovery found %d peers", len(peers)))
+		return peers, nil
+	}
+
+	// Legacy Cloudflare Worker discovery
 	if n.cfg.API.Endpoint == "" {
 		return nil, fmt.Errorf("discovery endpoint is not configured")
 	}
@@ -698,6 +795,120 @@ PersistentKeepalive = 25
 func (n *NodeService) ConnectToPeer(nodeID string) error {
 	n.addLog("info", fmt.Sprintf("Connecting to peer %s...", nodeID))
 
+	if n.cfg.P2P.Enabled {
+		return n.connectToPeerP2P(nodeID)
+	}
+
+	return n.connectToPeerLegacy(nodeID)
+}
+
+func (n *NodeService) connectToPeerP2P(nodeID string) error {
+	p2pPeers, err := n.p2p.DiscoverPeersWithTimeout(discoveryTimeout)
+	if err != nil {
+		n.addLog("error", fmt.Sprintf("P2P discovery failed: %v", err))
+		return err
+	}
+
+	pid, _ := peer.Decode(nodeID)
+	var targetPeer *P2PPeerInfo
+	for i, pp := range p2pPeers {
+		if string(pp.ID) == nodeID || pp.ID == pid {
+			targetPeer = &p2pPeers[i]
+			break
+		}
+	}
+
+	if targetPeer == nil {
+		return fmt.Errorf("peer %s not found via P2P discovery", nodeID)
+	}
+
+	privKey, pubKey, err := GenerateWGKeypair()
+	if err != nil {
+		err = fmt.Errorf("failed to generate client keypair: %w", err)
+		n.addLog("error", err.Error())
+		return err
+	}
+
+	clientIP, err := n.generateUniqueClientIP()
+	if err != nil {
+		err = fmt.Errorf("failed to generate unique client IP: %w", err)
+		n.addLog("error", err.Error())
+		return err
+	}
+
+	// Connect to peer's P2P host first to establish libp2p connection for signaling
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	addrs := targetPeer.Addrs
+	if len(addrs) == 0 {
+		return fmt.Errorf("no addresses known for peer %s", nodeID)
+	}
+
+	pi := peer.AddrInfo{ID: targetPeer.ID, Addrs: addrs}
+	if err := n.p2p.host.Connect(ctx, pi); err != nil {
+		n.addLog("warning", fmt.Sprintf("P2P connect to peer failed (trying relay): %v", err))
+	}
+
+	// Send connect request via P2P stream
+	req := P2PConnectReq{
+		NodeID:       n.cfg.Node.ID,
+		ClientPubKey: pubKey,
+		ClientIP:     clientIP,
+		DisplayName:  n.cfg.Node.DisplayName,
+	}
+
+	resp, err := n.p2p.SendConnectRequest(targetPeer.ID, req)
+	if err != nil {
+		return fmt.Errorf("P2P connect request failed: %w", err)
+	}
+
+	if !resp.Success {
+		errMsg := "peer rejected connection"
+		if resp.Error != "" {
+			errMsg = resp.Error
+		}
+		return errors.New(errMsg)
+	}
+
+	// Create WG config with peer info from response
+	if resp.ServerPubKey == "" {
+		return fmt.Errorf("peer did not provide WireGuard public key")
+	}
+
+	// Use the peer endpoint if available, otherwise use relay
+	wgEndpoint := fmt.Sprintf("%s:51820", strings.Split(addrs[0].String(), "/")[2])
+	if resp.ServerIP != "" {
+		wgEndpoint = resp.ServerIP
+	}
+
+	if err := CreateClientWGConfig(privKey, resp.ServerPubKey, wgEndpoint, clientIP); err != nil {
+		return fmt.Errorf("failed to create client WG config: %w", err)
+	}
+
+	configPath, _ := GetClientWGConfigPath()
+	n.addLog("info", "Stopping any existing tunnel before connecting to peer...")
+	if stopErr := n.wgManager.StopTunnel(configPath); stopErr != nil {
+		n.addLog("info", fmt.Sprintf("Tunnel stop before connect: %v", stopErr))
+	}
+
+	if err := n.wgManager.StartTunnel(configPath); err != nil {
+		return fmt.Errorf("failed to start client tunnel: %w", err)
+	}
+
+	n.mu.Lock()
+	n.connectedPeerID = nodeID
+	n.connectedP2PID = targetPeer.ID
+	n.telemetry.TunnelActive = true
+	n.telemetry.SharingEnabled = false
+	n.telemetry.TunnelError = ""
+	n.mu.Unlock()
+
+	n.addLog("info", fmt.Sprintf("Successfully connected to peer %s via P2P", nodeID))
+	return nil
+}
+
+func (n *NodeService) connectToPeerLegacy(nodeID string) error {
 	peers, err := n.DiscoverPeers()
 	if err != nil {
 		err = fmt.Errorf("failed to discover peers: %w", err)
@@ -730,7 +941,7 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 		n.addLog("error", fmt.Sprintf("Cannot establish connectivity to peer %s: %v", peer.NodeID, err))
 		return err
 	}
-	
+
 	// Update peer endpoint with the working one
 	peer.Endpoint = effectiveEndpoint
 
@@ -749,7 +960,7 @@ func (n *NodeService) ConnectToPeer(nodeID string) error {
 		n.addLog("error", err.Error())
 		return err
 	}
-	
+
 	if err := CreateClientWGConfig(privKey, peer.PublicKey, peer.Endpoint, clientIP); err != nil {
 		err = fmt.Errorf("failed to create client WireGuard config: %w", err)
 		n.addLog("error", err.Error())
@@ -856,7 +1067,7 @@ func (n *NodeService) tryUDPHolePunching(peer *DiscoveryPeer) bool {
 	}
 	
 	// Create UDP connection
-	conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", host, port))
+	conn, err := net.Dial("udp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		n.addLog("debug", fmt.Sprintf("UDP hole punching dial failed: %v", err))
 		return false
@@ -1029,15 +1240,15 @@ func (n *NodeService) DisconnectFromPeer() error {
 
 	n.mu.Lock()
 	targetID := n.connectedPeerID
+	p2pID := n.connectedP2PID
 	n.connectedPeerID = ""
+	n.connectedP2PID = ""
 	n.mu.Unlock()
 
-	// Get our client public key to notify the target node
-	clientPubKey := ""
-	if targetID != "" {
+	if n.cfg.P2P.Enabled && p2pID != "" {
+		clientPubKey := ""
 		configPath, _ := GetClientWGConfigPath()
 		if configPath != "" {
-			// Read the client config to get our public key
 			if content, err := os.ReadFile(configPath); err == nil {
 				scanner := bufio.NewScanner(strings.NewReader(string(content)))
 				for scanner.Scan() {
@@ -1053,7 +1264,39 @@ func (n *NodeService) DisconnectFromPeer() error {
 				}
 			}
 		}
-		
+
+		if clientPubKey != "" {
+			msg := P2PDisconnectMsg{
+				NodeID:       n.cfg.Node.ID,
+				ClientPubKey: clientPubKey,
+			}
+			if err := n.p2p.SendDisconnectMessage(p2pID, msg); err != nil {
+				n.addLog("warning", fmt.Sprintf("Failed to send P2P disconnect: %v", err))
+			} else {
+				n.addLog("info", "Sent P2P disconnect message to peer.")
+			}
+		}
+	} else if targetID != "" {
+		// Legacy: notify via Cloudflare Worker
+		clientPubKey := ""
+		configPath, _ := GetClientWGConfigPath()
+		if configPath != "" {
+			if content, err := os.ReadFile(configPath); err == nil {
+				scanner := bufio.NewScanner(strings.NewReader(string(content)))
+				for scanner.Scan() {
+					line := strings.TrimSpace(scanner.Text())
+					if strings.HasPrefix(line, "PrivateKey =") {
+						privKey := strings.TrimPrefix(line, "PrivateKey =")
+						privKey = strings.TrimSpace(privKey)
+						if pubKey, err := DerivePublicKey(privKey); err == nil {
+							clientPubKey = pubKey
+							break
+						}
+					}
+				}
+			}
+		}
+
 		// Notify target node to remove us from their config
 		if clientPubKey != "" {
 			if err := n.sendDisconnectNotification(targetID, clientPubKey); err != nil {
@@ -1062,7 +1305,7 @@ func (n *NodeService) DisconnectFromPeer() error {
 				n.addLog("info", "Sent disconnect notification to peer.")
 			}
 		}
-		
+
 		if err := n.cancelConnectRequest(targetID); err != nil {
 			n.addLog("warning", fmt.Sprintf("Failed to cancel connect request: %v", err))
 		} else {
@@ -1384,11 +1627,16 @@ func (n *NodeService) ToggleSharing(enabled bool) bool {
 	// Write changes to file in background
 	go n.saveConfigBackground(cfg)
 	go func() {
-		n.stopDiscoveryHeartbeat()
-		if err := n.unregisterDiscovery(); err != nil {
-			n.addLog("warning", fmt.Sprintf("Failed to unregister from discovery: %v", err))
+		if n.cfg.P2P.Enabled {
+			n.p2p.StopAdvertising()
+			n.addLog("info", "Stopped P2P advertising.")
 		} else {
-			n.addLog("info", "Unregistered from Cloudflare discovery.")
+			n.stopDiscoveryHeartbeat()
+			if err := n.unregisterDiscovery(); err != nil {
+				n.addLog("warning", fmt.Sprintf("Failed to unregister from discovery: %v", err))
+			} else {
+				n.addLog("info", "Unregistered from Cloudflare discovery.")
+			}
 		}
 	}()
 
@@ -1493,24 +1741,28 @@ func (n *NodeService) startSharingTunnel() {
 	}()
 
 	if n.cfg.Node.IsPublic {
-		n.refreshPublicIP()
-		endpoint := n.telemetry.PublicIP
-		if endpoint != "" {
-			// Calculate a unique port based on node ID hash to avoid conflicts
-			// This ensures each device behind the same NAT has a unique endpoint
-			uniquePort := n.calculateUniqueWireGuardPort()
-			endpoint = fmt.Sprintf("%s:%d", endpoint, uniquePort)
-			
-			// Store the port mapping for when we receive connections
-			n.mu.Lock()
-			n.wireguardPort = uniquePort
-			n.mu.Unlock()
-		}
-		if err := n.registerDiscovery(pubKey, endpoint); err != nil {
-			n.addLog("warning", fmt.Sprintf("Discovery registration failed: %v", err))
+		if n.cfg.P2P.Enabled {
+			if err := n.p2p.StartAdvertising(); err != nil {
+				n.addLog("warning", fmt.Sprintf("P2P advertising failed: %v", err))
+			} else {
+				n.addLog("info", "Advertising via P2P DHT mesh (zero-infrastructure).")
+			}
 		} else {
-			n.addLog("info", "Registered node with Cloudflare discovery service.")
-			go n.startDiscoveryHeartbeat()
+			n.refreshPublicIP()
+			endpoint := n.telemetry.PublicIP
+			if endpoint != "" {
+				uniquePort := n.calculateUniqueWireGuardPort()
+				endpoint = fmt.Sprintf("%s:%d", endpoint, uniquePort)
+				n.mu.Lock()
+				n.wireguardPort = uniquePort
+				n.mu.Unlock()
+			}
+			if err := n.registerDiscovery(pubKey, endpoint); err != nil {
+				n.addLog("warning", fmt.Sprintf("Discovery registration failed: %v", err))
+			} else {
+				n.addLog("info", "Registered node with Cloudflare discovery service.")
+				go n.startDiscoveryHeartbeat()
+			}
 		}
 	}
 

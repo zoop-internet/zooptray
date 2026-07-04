@@ -65,7 +65,7 @@ func TestCreateWGConfigCreatesDirectory(t *testing.T) {
 		t.Fatalf("GenerateWGKeypair() error = %v", err)
 	}
 
-	if err := CreateWGConfig(privateKey, "lo"); err != nil {
+	if err := CreateWGConfig(privateKey, "lo", 51820); err != nil {
 		t.Fatalf("CreateWGConfig() error = %v", err)
 	}
 
