@@ -1,375 +1,312 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
-  Check, Pause, Play, CheckCircle, AlertCircle, Copy,
-  Key, Globe, Loader, AlertTriangle, Server
+  Check, Pause, Play, Copy, Key, Globe, Server,
+  Loader, TrendingUp, TrendingDown, HardDrive, Users,
+  Activity, Download, Upload, ExternalLink, Eye
 } from 'lucide-react';
 import { toast } from './Toast';
+import { CreateConnectionProfile } from '../../wailsjs/go/main/NodeService';
 
-export default function Dashboard({ 
-  telemetry, 
-  config, 
-  onToggleSharing, 
-  bandwidthHistory, 
-  dataHistory,
-  uptimeString,
-  wgInfo,
-  wgLoading,
+const SPEED_WIDTH = 180;
+const SPEED_HEIGHT = 40;
+
+function MiniSparkline({ data, color }) {
+  if (!data || data.length < 2) return <div className="mini-sparkline-placeholder">—</div>;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * SPEED_WIDTH;
+    const y = SPEED_HEIGHT - ((v - min) / range) * (SPEED_HEIGHT - 6) - 3;
+    return `${x},${y}`;
+  });
+  const path = `M ${points.join(' L ')}`;
+  return (
+    <svg width={SPEED_WIDTH} height={SPEED_HEIGHT} className="mini-sparkline">
+      <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export default function Dashboard({
+  telemetry, config, onToggleSharing,
+  bandwidthHistory, dataHistory, uptimeString,
+  wgInfo, wgLoading, clients,
 }) {
   const isOnline = telemetry.tunnelActive;
-  const publicIP = telemetry.publicIP || 'Not detected';
   const [showWgModal, setShowWgModal] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
-  const [copiedField, setCopiedField] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileData, setProfileData] = useState(null);
 
-  // Automatically reopen modal when loading initiates
-  React.useEffect(() => {
-    if (wgLoading) {
-      setShowWgModal(true);
-    }
+  useEffect(() => {
+    if (wgLoading) setShowWgModal(true);
   }, [wgLoading]);
+
+  const currentTotal = telemetry.uploadSpeed + telemetry.downloadSpeed;
 
   const handleCopyNodeId = () => {
     const id = config?.node?.id || 'node-alpha-7';
     navigator.clipboard.writeText(id);
     setCopiedId(true);
-    toast.info(`Node ID copied: ${id}`);
+    toast.info('Node ID copied');
     setTimeout(() => setCopiedId(false), 2000);
   };
 
-  const handleCopyField = (key, value) => {
-    if (!value) return;
-    navigator.clipboard.writeText(value);
-    setCopiedField(key);
-    toast.success(`${key} copied!`);
-    setTimeout(() => setCopiedField(null), 2000);
-  };
-
   const handleToggle = () => {
-    const next = !isOnline;
-    onToggleSharing(next);
-    if (next) {
-      setShowWgModal(true);
-      toast.success('Node started — configuring Zoop tunnel…');
+    onToggleSharing(!isOnline);
+    if (!isOnline) {
+      toast.success('Starting Zoop tunnel…');
     } else {
-      toast.warning('Node paused — sharing stopped');
+      toast.warning('Sharing stopped');
     }
   };
 
-  // Render a responsive SVG sparkline path
-  const makeSparklinePath = (history, width, height) => {
-    if (!history || history.length === 0) return "";
-    const minVal = Math.min(...history);
-    const maxVal = Math.max(...history);
-    const range = maxVal - minVal || 1;
-    const points = history.map((val, idx) => {
-      const x = (idx / (history.length - 1)) * width;
-      const y = height - ((val - minVal) / range) * (height - 8) - 4;
-      return `${x},${y}`;
-    });
-    return `M ${points.join(" L ")}`;
+  const handleGenerateProfile = async () => {
+    if (!config?.node?.id) {
+      toast.error('Node ID not available');
+      return;
+    }
+    setProfileLoading(true);
+    try {
+      const profile = await CreateConnectionProfile(config.node.id);
+      setProfileData(profile);
+      setShowWgModal(true);
+      toast.success('Connection profile generated');
+    } catch (err) {
+      toast.error(err?.message || 'Failed to generate profile');
+    } finally {
+      setProfileLoading(false);
+    }
   };
 
-  const bandwidthPath = useMemo(() => makeSparklinePath(bandwidthHistory, 220, 50), [bandwidthHistory]);
-  const dataPath      = useMemo(() => makeSparklinePath(dataHistory, 220, 50), [dataHistory]);
+  const stats = useMemo(() => [
+    {
+      id: 'upload',
+      label: 'Upload',
+      value: telemetry.uploadSpeed.toFixed(1),
+      unit: 'Mbps',
+      icon: <Upload size={18} />,
+      color: 'var(--cyan)',
+      barColor: '#08f2ff',
+    },
+    {
+      id: 'download',
+      label: 'Download',
+      value: telemetry.downloadSpeed.toFixed(1),
+      unit: 'Mbps',
+      icon: <Download size={18} />,
+      color: 'var(--green)',
+      barColor: '#14f06d',
+    },
+    {
+      id: 'data',
+      label: 'Data Today',
+      value: telemetry.totalDataShared.toFixed(2),
+      unit: 'GB',
+      icon: <HardDrive size={18} />,
+      color: 'var(--blue)',
+      barColor: '#126cff',
+    },
+    {
+      id: 'clients',
+      label: 'Active Clients',
+      value: String(telemetry.activeClientsCount),
+      unit: 'devices',
+      icon: <Users size={18} />,
+      color: 'var(--purple)',
+      barColor: '#8a3ffc',
+    },
+  ], [telemetry]);
 
-  const currentTotalSpeed = isOnline ? (telemetry.downloadSpeed + telemetry.uploadSpeed) : 0;
+  const upSpeed = isOnline ? telemetry.uploadSpeed : 0;
+  const downSpeed = isOnline ? telemetry.downloadSpeed : 0;
+  const maxSpeed = Math.max(upSpeed, downSpeed, 1);
 
-  // ── Zoop Config fields to display ─────────────────────────────────────
-  const wgFields = wgInfo ? [
-    { key: 'Public Key',   value: wgInfo.publicKey,            icon: <Key size={14} />,    mono: true  },
-    { key: 'Listen Port',  value: String(wgInfo.listenPort),   icon: <Globe size={14} />,  mono: false },
-    { key: 'Address',      value: wgInfo.address,              icon: <Server size={14} />, mono: false },
-    { key: 'Interface',    value: wgInfo.wgInterface,          icon: <Globe size={14} />,  mono: false },
-    { key: 'Config Path',  value: wgInfo.configPath,           icon: <Key size={14} />,    mono: true  },
-  ] : [];
-
-  // Client-side peer block template
-  const peerBlock = wgInfo
-    ? `[Interface]\nPrivateKey = <CLIENT_PRIVATE_KEY>\nAddress = 10.200.0.2/32\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = ${wgInfo.publicKey || '<SERVER_PUBLIC_KEY>'}\nEndpoint = <YOUR_PUBLIC_IP>:${wgInfo.listenPort || 51820}\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25`
-    : '';
+  const recentClients = (clients || []).slice(0, 4);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div className="dash">
 
-      {/* ── Zoop Connection Modal Popup Overlay ───────────────────────────────── */}
-      {showWgModal && (wgLoading || wgInfo) && (
-        <div className="wg-modal-overlay" onClick={() => !wgLoading && setShowWgModal(false)}>
-          <div className="wg-modal-content" onClick={(e) => e.stopPropagation()}>
-            
-            {/* Loading Modal State */}
+      {/* ── Connection Modal ── */}
+      {showWgModal && (wgLoading || wgInfo || profileData) && (
+        <div className="wg-modal-overlay" onClick={() => { if (!wgLoading) { setShowWgModal(false); setProfileData(null); } }}>
+          <div className="wg-modal-content" onClick={e => e.stopPropagation()}>
             {wgLoading && (
               <div className="wg-loading-banner">
-                <div className="wg-loading-spinner">
-                  <Loader size={24} className="wg-spin" />
-                </div>
+                <div className="wg-loading-spinner"><Loader size={24} className="wg-spin" /></div>
                 <div>
                   <div className="wg-loading-title">Zooping you in…</div>
-                  <div className="wg-loading-sub">Generating credentials, configuring routing, and establishing your Zoop tunnel.</div>
+                  <div className="wg-loading-sub">Generating credentials and establishing tunnel.</div>
                 </div>
               </div>
             )}
 
-            {/* Loaded Config Profile State */}
-            {wgInfo && !wgLoading && (
-              <div className={`wg-config-card`}>
-                
-                {/* Modal Header */}
+            {(wgInfo || profileData) && !wgLoading && (
+              <div className="wg-config-card">
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div className={`wg-status-dot ${wgInfo.active ? 'on' : 'off'}`} />
-                    <span style={{ fontSize: '16px', fontWeight: '600', color: 'var(--ink)' }}>
-                      Zoop Connection Profile
-                    </span>
-                    {wgInfo.active
-                      ? <span className="wg-badge active">Active</span>
-                      : <span className="wg-badge error"><AlertTriangle size={11} /> Setup needed</span>
-                    }
+                    <div className={`wg-status-dot ${wgInfo?.active ? 'on' : 'off'}`} />
+                    <span style={{ fontSize: '16px', fontWeight: '600' }}>WireGuard Connection Profile</span>
                   </div>
                 </div>
-
-                {wgInfo.error && (
-                  <div className="wg-error-notice" style={{ borderRadius: '8px', border: '1px solid rgba(255, 205, 26, 0.2)' }}>
-                    <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: '2px' }} />
-                    <span>{wgInfo.error}</span>
-                  </div>
-                )}
-
-                <div className="wg-config-body" style={{ padding: '4px 0 0' }}>
-                  {/* Server fields */}
-                  <div className="wg-section-label">Server Configuration</div>
+                <div className="wg-config-body" style={{ padding: '16px 0 0' }}>
                   <div className="wg-fields">
-                    {wgFields.map(f => (
-                      <div className="wg-field-row" key={f.key}>
+                    {[
+                      { label: 'Public Key', value: wgInfo?.publicKey || profileData?.publicKey || '—', icon: <Key size={14} /> },
+                      { label: 'Listen Port', value: String(wgInfo?.listenPort || profileData?.listenPort || '51820'), icon: <Globe size={14} /> },
+                      { label: 'Address', value: wgInfo?.address || profileData?.address || '—', icon: <Server size={14} /> },
+                      { label: 'Interface', value: wgInfo?.wgInterface || profileData?.interface || '—', icon: <Activity size={14} /> },
+                    ].map(f => (
+                      <div className="wg-field-row" key={f.label}>
                         <div className="wg-field-icon">{f.icon}</div>
-                        <div className="wg-field-label">{f.key}</div>
-                        <div className={`wg-field-value ${f.mono ? 'mono' : ''}`}>
-                          <span>{f.value}</span>
-                        </div>
-                        <button
-                          type="button"
-                          className="wg-copy-btn"
-                          title={`Copy ${f.key}`}
-                          onClick={() => handleCopyField(f.key, f.value)}
-                        >
-                          {copiedField === f.key
-                            ? <Check size={13} color="var(--green)" />
-                            : <Copy size={13} />
-                          }
-                        </button>
+                        <div className="wg-field-label">{f.label}</div>
+                        <div className="wg-field-value mono">{f.value}</div>
                       </div>
                     ))}
                   </div>
-
-                  {/* Client peer block */}
-                  <div className="wg-section-label" style={{ marginTop: '20px' }}>
-                    Client Configuration Block
-                    <span className="wg-section-hint">— paste this into each connecting device's configuration</span>
-                  </div>
-                  <div className="wg-peer-block">
-                    <pre>{peerBlock}</pre>
-                    <button
-                      type="button"
-                      className="wg-copy-btn wg-copy-block"
-                      title="Copy peer block"
-                      onClick={() => handleCopyField('Peer Block', peerBlock)}
-                    >
-                      {copiedField === 'Peer Block'
-                        ? <><Check size={13} color="var(--green)" /> Copied!</>
-                        : <><Copy size={13} /> Copy all</>
-                      }
-                    </button>
-                  </div>
                 </div>
-
-                {/* Close Button at bottom of modal */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
-                  <button 
-                    type="button" 
-                    className="btn btn-secondary" 
-                    onClick={() => setShowWgModal(false)}
-                    style={{ minWidth: '100px' }}
-                  >
-                    Done
-                  </button>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+                  <button type="button" className="btn" onClick={() => { setShowWgModal(false); setProfileData(null); }} style={{ minWidth: '100px' }}>Done</button>
                 </div>
-
               </div>
             )}
-
           </div>
         </div>
       )}
 
-      {/* ── Node Status Card ──────────────────────────────────────────────────── */}
-      <div className="node-status-card">
-        <div className="node-status-left">
-          <div className="status-ring-container">
-            <svg className="status-ring-circle" viewBox="0 0 100 100">
-              <circle className="status-ring-bg" cx="50" cy="50" r="40" />
-              <circle 
-                className={`status-ring-active ${isOnline ? '' : 'offline'}`}
-                cx="50" cy="50" r="40" 
-                strokeDashoffset={isOnline ? 0 : 251.2}
-              />
-            </svg>
-            <div className={`status-ring-center ${isOnline ? '' : 'offline'}`}>
-              {wgLoading
-                ? <Loader size={18} className="wg-spin" />
-                : isOnline ? <Check size={20} strokeWidth={3} /> : <Pause size={18} strokeWidth={3} />
-              }
-            </div>
+      {/* ── Hero Status Banner ── */}
+      <div className={`dash-hero ${isOnline ? 'online' : ''}`}>
+        <div className="dash-hero-left">
+          <div className={`dash-hero-indicator ${isOnline ? 'online' : ''}`}>
+            {wgLoading ? <Loader size={22} className="wg-spin" /> : isOnline ? <Check size={22} /> : <Pause size={22} />}
           </div>
-
-          <div className="node-status-info">
-            <div className="node-status-msg">
-              <h2>
-                {wgLoading
-                  ? 'Establishing Zoop Connection…'
-                  : isOnline ? 'Your node is connected' : 'Your node is disconnected'
-                }
-              </h2>
-              <p>
-                {wgLoading
-                  ? 'Configuring keys and interface. This takes a few seconds.'
-                  : telemetry.tunnelError
-                    ? telemetry.tunnelError
-                  : isOnline 
-                    ? 'Your device is actively sharing network resources with the decentralized network.' 
-                    : 'Hotspot disabled. No guest traffic is being routed.'
-                }
-              </p>
+          <div>
+            <div className="dash-hero-title">
+              {wgLoading ? 'Starting…' : isOnline ? 'Connected' : 'Offline'}
             </div>
-            <button 
-              type="button" 
-              className="btn btn-primary"
-              onClick={handleToggle}
-              disabled={wgLoading}
-              style={{ alignSelf: 'flex-start', minWidth: '140px', opacity: wgLoading ? 0.6 : 1 }}
-            >
-              {isOnline ? (
-                <>
-                  <Pause size={14} />
-                  <span>Pause Sharing</span>
-                </>
-              ) : (
-                <>
-                  <Play size={14} />
-                  <span>{wgLoading ? 'Starting…' : 'Start Sharing'}</span>
-                </>
-              )}
-            </button>
+            <div className="dash-hero-sub">
+              {wgLoading ? 'Establishing tunnel' : isOnline ? uptimeString : 'Node is idle'}
+            </div>
           </div>
         </div>
-
-        <div className="node-status-right">
-          <div className="meta-row">
-            <span className="meta-label">Node ID</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span className="meta-value">{config ? config.node.id : '…'}</span>
-              <button type="button" className="copy-btn" onClick={handleCopyNodeId} title="Copy Node ID">
-                {copiedId ? <Check size={14} color="var(--green)" /> : <Copy size={14} />}
-              </button>
+        <div className="dash-hero-right">
+          <div className="dash-hero-metrics">
+            <div className="dash-hero-metric">
+              <span className="dash-hero-metric-label">Node ID</span>
+              <span className="dash-hero-metric-value mono">{config?.node?.id || '…'}</span>
+            </div>
+            <div className="dash-hero-metric">
+              <span className="dash-hero-metric-label">IP</span>
+              <span className="dash-hero-metric-value">{telemetry.publicIP || '—'}</span>
+            </div>
+            <div className="dash-hero-metric">
+              <span className="dash-hero-metric-label">Peers</span>
+              <span className="dash-hero-metric-value">{telemetry.activeClientsCount}</span>
             </div>
           </div>
-          <div className="meta-row">
-            <span className="meta-label">Uptime</span>
-            <span className="meta-value">{isOnline ? uptimeString : '0d 0h 0m'}</span>
+        </div>
+        {isOnline && (
+          <div className="dash-hero-accent" style={{ background: `linear-gradient(90deg, #14f06d, #08f2ff)` }} />
+        )}
+      </div>
+
+      {/* ── Quick Actions Row ── */}
+      <div className="dash-actions">
+        <button type="button" className="btn btn-primary dash-action-btn" onClick={handleToggle} disabled={wgLoading}>
+          {isOnline ? <><Pause size={15} /> Stop Sharing</> : <><Play size={15} /> Start Sharing</>}
+        </button>
+        <button type="button" className="btn dash-action-btn" onClick={handleCopyNodeId}>
+          <Copy size={15} /> {copiedId ? 'Copied!' : 'Copy Node ID'}
+        </button>
+        <button type="button" className="btn dash-action-btn" onClick={handleGenerateProfile} disabled={profileLoading}>
+          {profileLoading ? <Loader size={15} className="wg-spin" /> : <Key size={15} />}
+          Generate Config
+        </button>
+        <button type="button" className="btn dash-action-btn" onClick={() => window.open('https://console.zoopnetwork.com', '_blank')}>
+          <ExternalLink size={15} /> Dashboard
+        </button>
+      </div>
+
+      {/* ── Bandwidth Meter ── */}
+      <div className="dash-bw-card">
+        <div className="dash-bw-header">
+          <span className="dash-bw-title">Live Throughput</span>
+          <span className="dash-bw-total">{currentTotal.toFixed(1)} <small>Mbps</small></span>
+        </div>
+        <div className="dash-bw-bars">
+          <div className="dash-bw-bar-wrap">
+            <span className="dash-bw-bar-label"><Upload size={12} /> Up</span>
+            <div className="dash-bw-bar-track">
+              <div className="dash-bw-bar-fill upload" style={{ width: `${(upSpeed / maxSpeed) * 100}%` }} />
+            </div>
+            <span className="dash-bw-bar-val">{upSpeed.toFixed(1)}</span>
           </div>
-          <div className="meta-row">
-            <span className="meta-label">Peers Connected</span>
-            <span className="meta-value">{isOnline ? telemetry.activeClientsCount : 0}</span>
+          <div className="dash-bw-bar-wrap">
+            <span className="dash-bw-bar-label"><Download size={12} /> Down</span>
+            <div className="dash-bw-bar-track">
+              <div className="dash-bw-bar-fill download" style={{ width: `${(downSpeed / maxSpeed) * 100}%` }} />
+            </div>
+            <span className="dash-bw-bar-val">{downSpeed.toFixed(1)}</span>
           </div>
-          <div className="meta-row">
-            <span className="meta-label">IP Address</span>
-            <span className="meta-value">{publicIP}</span>
+        </div>
+        <div className="dash-bw-sparklines">
+          <div className="dash-bw-sparkline-group">
+            <span className="dash-bw-sparkline-label" style={{ color: 'var(--cyan)' }}>Upload</span>
+            <MiniSparkline data={bandwidthHistory} color="#08f2ff" />
+          </div>
+          <div className="dash-bw-sparkline-group">
+            <span className="dash-bw-sparkline-label" style={{ color: 'var(--green)' }}>Download</span>
+            <MiniSparkline data={dataHistory} color="#14f06d" />
           </div>
         </div>
       </div>
 
-      {/* ── Telemetry Widgets Grid ────────────────────────────────────────────── */}
-      <div className="telemetry-grid">
-        {/* Bandwidth Shared Card */}
-        <div className="telemetry-card bandwidth">
-          <div className="telemetry-header">
-            <span className="telemetry-label">Bandwidth Shared</span>
-            <div className="telemetry-value-wrap">
-              <span className="telemetry-value">{currentTotalSpeed.toFixed(1)}</span>
-              <span className="telemetry-unit">Mbps</span>
+      {/* ── Stat Tiles ── */}
+      <div className="dash-stats">
+        {stats.map(s => (
+          <div key={s.id} className="dash-stat-tile" style={{ borderTopColor: s.color }}>
+            <div className="dash-stat-tile-header">
+              <span style={{ color: s.color }}>{s.icon}</span>
+              <span className="dash-stat-tile-label">{s.label}</span>
+            </div>
+            <div className="dash-stat-tile-value">
+              {s.value} <small>{s.unit}</small>
+            </div>
+            <div className="dash-stat-tile-bar">
+              <div className="dash-stat-tile-bar-fill" style={{
+                width: s.id === 'clients' ? `${Math.min(parseInt(s.value) * 10, 100)}%` : '100%',
+                background: s.barColor,
+              }} />
             </div>
           </div>
-          
-          <div className="sparkline-container">
-            {isOnline && bandwidthHistory.length > 1 ? (
-              <svg className="sparkline-svg" width="220" height="50">
-                <path className="sparkline-path bandwidth" d={bandwidthPath} />
-              </svg>
-            ) : (
-              <div style={{ fontSize: '11px', color: 'var(--muted-dark)', paddingBottom: '6px' }}>
-                {isOnline ? 'Collecting stats...' : 'Daemon offline'}
-              </div>
-            )}
-          </div>
-
-          <div className="telemetry-footer up">
-            <span>{isOnline ? 'Live WireGuard throughput' : 'No active tunnel'}</span>
-          </div>
-        </div>
-
-        {/* Data Shared Today Card */}
-        <div className="telemetry-card data">
-          <div className="telemetry-header">
-            <span className="telemetry-label">Data Shared Today</span>
-            <div className="telemetry-value-wrap">
-              <span className="telemetry-value">{telemetry.totalDataShared.toFixed(2)}</span>
-              <span className="telemetry-unit">GB</span>
-            </div>
-          </div>
-          
-          <div className="sparkline-container">
-            {isOnline && dataHistory.length > 1 ? (
-              <svg className="sparkline-svg" width="220" height="50">
-                <path className="sparkline-path data" d={dataPath} />
-              </svg>
-            ) : (
-              <div style={{ fontSize: '11px', color: 'var(--muted-dark)', paddingBottom: '6px' }}>
-                {isOnline ? 'Collecting stats...' : 'Daemon offline'}
-              </div>
-            )}
-          </div>
-
-          <div className="telemetry-footer up" style={{ color: 'var(--green)' }}>
-            <span>{isOnline ? 'Total from WireGuard counters' : 'No active tunnel'}</span>
-          </div>
-        </div>
-
-        {/* Status Card */}
-        <div className="telemetry-card health">
-          <div className="telemetry-header">
-            <span className="telemetry-label">Status</span>
-            <div className="telemetry-value-wrap" style={{ marginTop: '4px' }}>
-              <span className="telemetry-value" style={{ fontSize: '22px', fontFamily: 'var(--font)', fontWeight: '700' }}>
-                {wgLoading ? 'Initializing' : isOnline ? 'Healthy' : telemetry.tunnelError ? 'Error' : 'Offline'}
-              </span>
-            </div>
-          </div>
-          
-          <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '8px' }}>
-            {wgLoading
-              ? 'Zoop connection starting up…'
-              : isOnline ? 'All systems operational' : telemetry.tunnelError ? telemetry.tunnelError : 'Sharing is currently disabled by policy'
-            }
-          </div>
-
-          <div className="status-badge-container">
-            <div className={`status-badge-circle ${isOnline ? '' : 'offline'}`}>
-              {wgLoading
-                ? <Loader size={18} className="wg-spin" />
-                : isOnline ? <CheckCircle size={18} /> : <AlertCircle size={18} />
-              }
-            </div>
-          </div>
-        </div>
+        ))}
       </div>
+
+      {/* ── Recent Clients ── */}
+      <div className="dash-clients-card">
+        <div className="dash-clients-header">
+          <span className="dash-clients-title"><Users size={15} /> Connected Devices</span>
+          <span className="dash-clients-count">{clients.length} active</span>
+        </div>
+        {recentClients.length > 0 ? (
+          <div className="dash-clients-list">
+            {recentClients.map(c => (
+              <div key={c.mac} className="dash-client-row">
+                <div className="dash-client-dot" />
+                <span className="dash-client-name">{c.name}</span>
+                <span className="dash-client-speed mono">{c.speed.toFixed(1)} Mbps</span>
+                <span className="dash-client-data mono">{c.dataShared.toFixed(1)} MB</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="dash-clients-empty">
+            {isOnline ? 'No devices connected yet' : 'Enable sharing to accept connections'}
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }

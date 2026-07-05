@@ -91,7 +91,7 @@ export default function About({ config, logs }) {
         {logsExpanded && (
           <>
             {/* Header filters */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', background: 'rgba(0,0,0,0.1)', borderBottom: '1px solid var(--line)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', background: 'var(--surface-soft)', borderBottom: '1px solid var(--line)' }}>
               <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: '600' }}>CONSOLE LOG STREAM</span>
               <div className="logs-filters">
                 {['all', 'info', 'warning', 'error'].map((level) => (

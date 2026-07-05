@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import zoopLogo from './assets/images/zoopicon.png';
-import { 
-  LayoutDashboard, Wifi, Monitor, Wallet, Settings as SettingsIcon, Info, Sun, Moon
-} from 'lucide-react';
+import { LayoutDashboard, Wifi, Monitor, Wallet, Settings as SettingsIcon, Info, Sun, Moon } from 'lucide-react';
 import * as runtime from "../wailsjs/runtime/runtime";
-import { GetConfig, SaveConfig, ToggleSharing, GetInterfaces, DisconnectClient, GetLogs, GetTunnelStatus, DiscoverPeers, ConnectToPeer, DisconnectFromPeer, GetPlatform } from "../wailsjs/go/main/NodeService";
+import { useTheme, useConfig, useTelemetry, usePeers, useClients, useLogs, useInterfaces, useSharing } from './hooks';
+import { DashboardSkeleton, SettingsSkeleton, DevicesSkeleton } from './components/LoadingSkeleton';
 
 import Dashboard  from './components/Dashboard';
 import Sharing    from './components/Sharing';
@@ -12,250 +11,50 @@ import Devices    from './components/Devices';
 import Earnings   from './components/Earnings';
 import Settings   from './components/Settings';
 import About      from './components/About';
-import ToastContainer, { toast } from './components/Toast';
+import ToastContainer from './components/Toast';
+
+const screens = {
+  dashboard: { title: 'Dashboard',  subtitle: 'Live overview of your node',     Component: Dashboard },
+  sharing:   { title: 'Sharing',    subtitle: 'Control your sharing preferences', Component: Sharing },
+  devices:   { title: 'Devices',    subtitle: 'Manage connected guest devices',   Component: Devices },
+  earnings:  { title: 'Earnings',   subtitle: 'Track your earnings and rewards',  Component: Earnings },
+  settings:  { title: 'Settings',   subtitle: 'Configure your node and network',  Component: Settings },
+  about:     { title: 'About',      subtitle: 'Node properties and diagnostic logs', Component: About },
+};
+
+const skeletons = {
+  dashboard: DashboardSkeleton,
+  settings:  SettingsSkeleton,
+  devices:   DevicesSkeleton,
+};
 
 export default function App() {
-  // Persist theme via localStorage so it survives app restarts
-  const [theme, setTheme] = useState(() => localStorage.getItem('zoop-theme') || 'dark');
+  const [theme, toggleTheme] = useTheme();
+  const { config, loading: configLoading, eulaVisible, acceptEula, handleSaveConfig } = useConfig();
+  const telemetry = useTelemetry();
+  const { discoveredPeers, discoveryLoading, connectedPeerId, loadDiscoveredPeers, handleConnectToPeer, handleDisconnectFromPeer } = usePeers();
+  const { clients, handleDisconnectClient } = useClients();
+  const logs = useLogs();
+  const interfaces = useInterfaces();
+  const { wgInfo, wgLoading, handleToggleSharing } = useSharing(telemetry.setTelemetry);
+
   const [currentScreen, setCurrentScreen] = useState('dashboard');
-  const [config, setConfig]       = useState(null);
-  const [interfaces, setInterfaces] = useState([]);
-  const [logs, setLogs]           = useState([]);
-  const [clients, setClients]     = useState([]);
-  const [discoveredPeers, setDiscoveredPeers] = useState([]);
-  const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const [connectedPeerId, setConnectedPeerId] = useState(null);
-  const [telemetry, setTelemetry] = useState({
-    uploadSpeed: 0, downloadSpeed: 0,
-    activeClientsCount: 0, totalDataShared: 0, sharingEnabled: false,
-    tunnelActive: false, tunnelError: '', startedAt: '', publicIP: ''
-  });
+  const [transitioning, setTransitioning] = useState(false);
 
-  const [eulaVisible, setEulaVisible] = useState(false);
-
-  const [bandwidthHistory, setBandwidthHistory] = useState(Array(20).fill(0));
-  const [dataHistory, setDataHistory]           = useState(Array(20).fill(0));
-
-  // WireGuard tunnel state
-  const [wgInfo, setWgInfo]       = useState(null);
-  const [wgLoading, setWgLoading] = useState(false);
-
-  const [uptimeString, setUptimeString] = useState('0d 0h 0m');
-
-  // Uptime ticker
-  useEffect(() => {
-    const updateUptime = () => {
-      if (!telemetry.startedAt || !telemetry.tunnelActive) {
-        setUptimeString('0d 0h 0m');
-        return;
-      }
-      const startedAt = Date.parse(telemetry.startedAt);
-      if (Number.isNaN(startedAt)) {
-        setUptimeString('0d 0h 0m');
-        return;
-      }
-      const diff = Math.max(0, Date.now() - startedAt);
-      const d = Math.floor(diff / (24 * 3600e3));
-      const h = Math.floor((diff % (24 * 3600e3)) / 3600e3);
-      const m = Math.floor((diff % 3600e3) / 60e3);
-      setUptimeString(`${d}d ${h}h ${m}m`);
-    };
-    updateUptime();
-    const interval = setInterval(updateUptime, 5000);
-    return () => clearInterval(interval);
-  }, [telemetry.startedAt, telemetry.tunnelActive]);
-
-  // Apply and persist theme
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('zoop-theme', theme);
-  }, [theme]);
-
-  // Load initial data
-  useEffect(() => {
-    GetConfig().then(cfg => {
-      setConfig(cfg);
-      GetPlatform().then(platform => {
-        if (!cfg.system?.eulaAccepted && platform === 'windows') {
-          setEulaVisible(true);
-        }
-      });
-      setTelemetry(prev => ({ ...prev, sharingEnabled: cfg.sharing.enabled }));
-    }).catch(err => {
-      console.error(err);
-      toast.error('Unable to load configuration');
-    });
-
-    GetInterfaces().then(setInterfaces).catch(err => {
-      console.error(err);
-      toast.warning('Unable to detect network interfaces');
-    });
-    GetLogs().then(l => setLogs(l || [])).catch(err => {
-      console.error(err);
-      toast.warning('Unable to load logs');
-    });
-    GetTunnelStatus().then(status => {
-      if (status) setTelemetry(prev => ({ ...prev, ...status }));
-    }).catch(err => {
-      console.error(err);
-      toast.warning('Unable to get tunnel status');
-    });
-  }, []);
-
-  const loadDiscoveredPeers = () => {
-    setDiscoveryLoading(true);
-    DiscoverPeers()
-      .then(setDiscoveredPeers)
-      .catch(err => {
-        console.error(err);
-        setDiscoveredPeers([]);
-        toast.warning('Unable to discover network devices.');
-      })
-      .finally(() => setDiscoveryLoading(false));
+  const navigate = (screen) => {
+    if (screen === currentScreen) return;
+    setTransitioning(true);
+    setTimeout(() => {
+      setCurrentScreen(screen);
+      setTransitioning(false);
+    }, 100);
   };
 
   useEffect(() => {
     if (currentScreen === 'devices') {
       loadDiscoveredPeers();
     }
-  }, [currentScreen]);
-
-  const handleConnectToPeer = async (nodeId) => {
-    try {
-      await ConnectToPeer(nodeId);
-      setConnectedPeerId(nodeId);
-      toast.success('Connected to peer successfully.');
-    } catch (err) {
-      console.error(err);
-      toast.error('Failed to connect to peer.');
-      throw err;
-    }
-  };
-
-  const handleDisconnectFromPeer = async () => {
-    try {
-      await DisconnectFromPeer();
-      setConnectedPeerId(null);
-      toast.success('Disconnected from peer.');
-    } catch (err) {
-      console.error(err);
-      toast.error('Failed to disconnect from peer.');
-    }
-  };
-
-  // Real-time Wails events
-  useEffect(() => {
-    runtime.EventsOn('telemetry_updated', (data) => {
-      setTelemetry(data);
-      const totalSpeed = data.uploadSpeed + data.downloadSpeed;
-      setBandwidthHistory(prev => data.tunnelActive ? [...prev.slice(1), totalSpeed] : Array(20).fill(0));
-      setDataHistory(prev => data.tunnelActive ? [...prev.slice(1), data.totalDataShared] : Array(20).fill(0));
-    });
-    runtime.EventsOn('clients_updated', (data) => setClients(data || []));
-    runtime.EventsOn('log_added', (newLog) => {
-      setLogs(prev => [...prev, newLog].slice(-100));
-    });
-
-    // WireGuard tunnel lifecycle events
-    runtime.EventsOn('wg_tunnel_ready', (info) => {
-      setWgLoading(false);
-      setWgInfo(info);
-    });
-    runtime.EventsOn('wg_tunnel_error', (info) => {
-      setWgLoading(false);
-      setWgInfo(info);
-      toast.error(info?.error || 'WireGuard tunnel failed to start');
-    });
-    runtime.EventsOn('wg_tunnel_stopped', () => {
-      setWgLoading(false);
-      setWgInfo(null);
-    });
-
-    return () => {
-      runtime.EventsOff('telemetry_updated');
-      runtime.EventsOff('clients_updated');
-      runtime.EventsOff('log_added');
-      runtime.EventsOff('wg_tunnel_ready');
-      runtime.EventsOff('wg_tunnel_error');
-      runtime.EventsOff('wg_tunnel_stopped');
-    };
-  }, []);
-
-  const handleToggleSharing = (nextState) => {
-    if (nextState) {
-      setWgLoading(true);
-      setWgInfo(null);
-    } else {
-      setWgInfo(null);
-      setWgLoading(false);
-    }
-
-    ToggleSharing(nextState)
-      .then(result => {
-        if (!nextState) {
-          setTelemetry(prev => ({ ...prev, sharingEnabled: result, tunnelActive: result }));
-          toast.info('Sharing disabled successfully.');
-        }
-      })
-      .catch(err => {
-        console.error(err);
-        setWgLoading(false);
-        toast.error('Unable to change sharing state.');
-      });
-  };
-
-  const handleDisconnectClient = (mac) => {
-    DisconnectClient(mac)
-      .then(success => {
-        if (success) {
-          setClients(prev => prev.filter(c => c.mac !== mac));
-          toast.success('Client disconnected successfully.');
-        } else {
-          toast.warning('Client was not found or already disconnected.');
-        }
-      })
-      .catch(err => {
-        console.error(err);
-        toast.error('Failed to disconnect client.');
-      });
-  };
-
-  const handleSaveConfig = (updatedConfig) => {
-    return SaveConfig(updatedConfig)
-      .then(() => {
-        setConfig(updatedConfig);
-        toast.success('Settings saved successfully');
-      })
-      .catch(err => {
-        console.error(err);
-        toast.error(err?.message || 'Failed to save settings');
-        throw err;
-      });
-  };
-
-  const acceptEula = () => {
-    if (!config) return;
-    const updated = { ...config };
-    if (!updated.system) updated.system = {};
-    updated.system.eulaAccepted = true;
-    SaveConfig(updated).then(() => {
-      setConfig(updated);
-      setEulaVisible(false);
-      toast.info('Thank you for accepting the EULA.');
-    }).catch(err => {
-      console.error(err);
-      toast.error('Failed to persist EULA acceptance');
-    });
-  };
-
-  const screenDetails = {
-    dashboard: { title: 'Dashboard',  subtitle: 'Live overview of your node' },
-    sharing:   { title: 'Sharing',    subtitle: 'Control your sharing preferences' },
-    devices:   { title: 'Devices',    subtitle: 'Manage connected guest devices' },
-    earnings:  { title: 'Earnings',   subtitle: 'Track your earnings and rewards' },
-    settings:  { title: 'Settings',   subtitle: 'Configure your node and network' },
-    about:     { title: 'About',      subtitle: 'Node properties and diagnostic logs' },
-  };
+  }, [currentScreen, loadDiscoveredPeers]);
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
@@ -266,16 +65,20 @@ export default function App() {
     { id: 'about',     label: 'About',     icon: <Info size={18} /> },
   ];
 
+  const { Component } = screens[currentScreen];
+  const Skeleton = skeletons[currentScreen];
+  const showSkeleton = configLoading && Skeleton;
+  const mergedTelemetry = { ...telemetry.telemetry, sharingEnabled: config?.sharing?.enabled ?? false };
+
   return (
     <div className="shell">
       <ToastContainer />
 
-      {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="sidebar-brand">
             <img src={zoopLogo} alt="Zoop Logo" />
-            <span>Zoop Desktop</span>
+            <span>Zoop One</span>
           </div>
 
           <nav className="sidebar-nav">
@@ -283,7 +86,7 @@ export default function App() {
               <div
                 key={item.id}
                 className={`nav-item ${currentScreen === item.id ? 'active' : ''}`}
-                onClick={() => setCurrentScreen(item.id)}
+                onClick={() => navigate(item.id)}
               >
                 <div className="nav-item-left">
                   {item.icon}
@@ -300,27 +103,25 @@ export default function App() {
           </nav>
         </div>
 
-        {/* Status Footer */}
         <div className="sidebar-status-card">
           <div className="sidebar-status-header">
-            <div className={`status-dot ${telemetry.tunnelActive ? 'green' : 'red'}`}></div>
+            <div className={`status-dot ${telemetry.telemetry.tunnelActive ? 'green' : 'red'}`}></div>
             <span className="sidebar-status-text">
-              {telemetry.tunnelActive ? 'Connected' : 'Offline'}
+              {telemetry.telemetry.tunnelActive ? 'Connected' : 'Offline'}
             </span>
           </div>
           <div className="sidebar-status-version">v1.0.0</div>
-          <span className="sidebar-status-link" onClick={() => alert('Your software is up to date.')}>
+          <span className="sidebar-status-link" onClick={() => runtime.BrowserOpenURL('https://github.com/Zoop-Network/zooptray/releases')}>
             Check for updates
           </span>
         </div>
       </aside>
 
-      {/* Main */}
       <main className="main">
         <header className="topbar">
           <div className="topbar-title">
-            <h1>{screenDetails[currentScreen].title}</h1>
-            <p>{screenDetails[currentScreen].subtitle}</p>
+            <h1>{screens[currentScreen].title}</h1>
+            <p>{screens[currentScreen].subtitle}</p>
           </div>
           <div className="topbar-right">
             {currentScreen === 'dashboard' && (
@@ -332,7 +133,7 @@ export default function App() {
             )}
             <button
               className="win-btn"
-              onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')}
+              onClick={toggleTheme}
               title="Toggle theme"
             >
               {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
@@ -340,26 +141,20 @@ export default function App() {
           </div>
         </header>
 
-        <section className="content">
-          {currentScreen === 'dashboard' && (
-            <Dashboard telemetry={telemetry} config={config}
-              onToggleSharing={handleToggleSharing}
-              bandwidthHistory={bandwidthHistory} dataHistory={dataHistory}
-              uptimeString={uptimeString}
+        <section className={`content ${transitioning ? 'content-exit' : 'content-enter'}`}>
+          {showSkeleton ? (
+            <Skeleton />
+          ) : (
+            <Component
+              telemetry={mergedTelemetry}
+              config={config}
+              bandwidthHistory={telemetry.bandwidthHistory}
+              dataHistory={telemetry.dataHistory}
+              uptimeString={telemetry.uptimeString}
               wgInfo={wgInfo}
               wgLoading={wgLoading}
-            />
-          )}
-          {currentScreen === 'sharing' && (
-            <Sharing telemetry={telemetry} config={config}
               onToggleSharing={handleToggleSharing}
-              uptimeString={uptimeString}
-            />
-          )}
-          {currentScreen === 'devices' && (
-            <Devices
               clients={clients}
-              telemetry={telemetry}
               discoveredPeers={discoveredPeers}
               discoveryLoading={discoveryLoading}
               onDisconnectClient={handleDisconnectClient}
@@ -367,38 +162,36 @@ export default function App() {
               onConnectToPeer={handleConnectToPeer}
               onDisconnectFromPeer={handleDisconnectFromPeer}
               connectedPeerId={connectedPeerId}
+              interfaces={interfaces}
+              onSaveConfig={handleSaveConfig}
+              logs={logs}
             />
-          )}
-          {currentScreen === 'earnings' && <Earnings />}
-          {currentScreen === 'settings' && (
-            <Settings config={config} interfaces={interfaces} onSaveConfig={handleSaveConfig} />
-          )}
-          {currentScreen === 'about' && (
-            <About config={config} logs={logs} />
           )}
         </section>
       </main>
+
       {eulaVisible && (
         <div className="confirm-overlay" onClick={() => {}}>
           <div className="confirm-dialog" style={{ maxWidth: '720px' }} onClick={e => e.stopPropagation()}>
             <h2>End User License Agreement</h2>
-            <div style={{ maxHeight: '48vh', overflow: 'auto', marginBottom: '12px' }}>
-              <p>By using this software you agree to the Zoop Network terms and conditions. Please read them carefully before proceeding.</p>
-              <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla facilisi. Suspendisse potenti.</p>
-              <p>— Zoop Network</p>
+            <div style={{ maxHeight: '48vh', overflow: 'auto', marginBottom: '12px', textAlign: 'left', fontSize: '13.5px', lineHeight: '1.6', color: 'var(--muted)' }}>
+              <p style={{ marginBottom: '12px' }}><strong>Zoop Network End User License Agreement</strong></p>
+              <p style={{ marginBottom: '10px' }}>By installing or using Zoop One ("Software"), you enter into a binding agreement with Zoop Network on the following terms.</p>
+              <p style={{ marginBottom: '10px' }}>1. <strong>Grant of License.</strong> Zoop Network grants you a non-exclusive, non-transferable, revocable license to install and use the Software for personal, non-commercial purposes in accordance with this agreement.</p>
+              <p style={{ marginBottom: '10px' }}>2. <strong>Network Participation.</strong> The Software connects to a decentralized peer-to-peer network. You acknowledge that network participation may involve sharing bandwidth and computational resources with other network participants.</p>
+              <p style={{ marginBottom: '10px' }}>3. <strong>Privacy.</strong> The Software collects minimal telemetry (connection status, uptime, bandwidth usage) required for network operations. No personal data, browsing history, or payload content is collected, stored, or transmitted to Zoop Network servers.</p>
+              <p style={{ marginBottom: '10px' }}>4. <strong>Limitation of Liability.</strong> The Software is provided "as is" without warranty of any kind. Zoop Network shall not be liable for any damages arising from the use or inability to use the Software.</p>
+              <p style={{ marginBottom: '10px' }}>5. <strong>Open Source.</strong> The Software is distributed as open source under the terms of the applicable license. You may inspect, modify, and distribute the source code in accordance with that license.</p>
+              <p style={{ marginBottom: '10px' }}>6. <strong>Termination.</strong> This agreement terminates automatically if you violate any of its terms. Upon termination, you must uninstall the Software and destroy all copies in your possession.</p>
+              <p>By clicking "Accept and Continue," you acknowledge that you have read, understood, and agree to be bound by these terms.</p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              <button className="btn" onClick={() => { /* Decline: do nothing for now */ }}>
-                Decline
-              </button>
-              <button className="btn btn-primary" onClick={acceptEula}>
-                Accept and Continue
-              </button>
+              <button className="btn" onClick={() => {}}>Decline</button>
+              <button className="btn btn-primary" onClick={acceptEula}>Accept and Continue</button>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 }

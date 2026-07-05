@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Monitor, Smartphone, Laptop, Tablet, Wifi, XCircle, Search, RefreshCw } from 'lucide-react';
+import { Monitor, Smartphone, Laptop, Tablet, Wifi, XCircle, Search, RefreshCw, Key, Loader } from 'lucide-react';
 import { toast } from './Toast';
+import { CreateConnectionProfile } from '../../wailsjs/go/main/NodeService';
 
 // Pick an icon based on device name heuristics
 function DeviceIcon({ name }) {
@@ -186,17 +187,37 @@ export default function Devices({ clients, telemetry, discoveredPeers, discovery
                       <span>Disconnect</span>
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      className="btn btn-primary device-kick-btn"
-                      disabled={connectingTo === peer.nodeId}
-                      onClick={() => {
-                        setConnectingTo(peer.nodeId);
-                        onConnectToPeer(peer.nodeId).finally(() => setConnectingTo(null));
-                      }}
-                    >
-                      <span>{connectingTo === peer.nodeId ? 'Connecting...' : 'Connect'}</span>
-                    </button>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary device-kick-btn"
+                        disabled={connectingTo === peer.nodeId}
+                        onClick={() => {
+                          setConnectingTo(peer.nodeId);
+                          onConnectToPeer(peer.nodeId).finally(() => setConnectingTo(null));
+                        }}
+                        style={{ flex: 1 }}
+                      >
+                        <span>{connectingTo === peer.nodeId ? 'Connecting...' : 'Connect'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn device-kick-btn"
+                        onClick={async () => {
+                          try {
+                            const profile = await CreateConnectionProfile(peer.nodeId);
+                            navigator.clipboard.writeText(JSON.stringify(profile, null, 2));
+                            toast.success('Client config copied');
+                          } catch (err) {
+                            toast.error('Failed to generate config');
+                          }
+                        }}
+                        style={{ flexShrink: 0, padding: '8px 10px' }}
+                        title="Get client config"
+                      >
+                        <Key size={14} />
+                      </button>
+                    </div>
                   )}
               </div>
             ))}

@@ -14,6 +14,24 @@ export namespace main {
 	        this.heartbeatIntervalSeconds = source["heartbeatIntervalSeconds"];
 	    }
 	}
+	export class P2PConfig {
+	    enabled: boolean;
+	    bootstrapPeers: string[];
+	    rendezvousNamespace: string;
+	    listenPort: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.bootstrapPeers = source["bootstrapPeers"];
+	        this.rendezvousNamespace = source["rendezvousNamespace"];
+	        this.listenPort = source["listenPort"];
+	    }
+	}
 	export class SystemConfig {
 	    autoStartOnBoot: boolean;
 	    preferredInterface: string;
@@ -66,35 +84,17 @@ export namespace main {
 	        this.isPublic = source["isPublic"];
 	    }
 	}
-	export class P2PConfig {
-	    enabled: boolean;
-	    bootstrapPeers: string[];
-	    rendezvousNamespace: string;
-	    listenPort: number;
-
-	    static createFrom(source: any = {}) {
-	        return new P2PConfig(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.enabled = source["enabled"];
-	        this.bootstrapPeers = source["bootstrapPeers"];
-	        this.rendezvousNamespace = source["rendezvousNamespace"];
-	        this.listenPort = source["listenPort"];
-	    }
-	}
 	export class Config {
 	    node: NodeConfig;
 	    sharing: SharingConfig;
 	    system: SystemConfig;
 	    api: ApiConfig;
 	    p2p: P2PConfig;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.node = this.convertValues(source["node"], NodeConfig);
@@ -162,6 +162,7 @@ export namespace main {
 	        this.message = source["message"];
 	    }
 	}
+	
 	
 	
 	

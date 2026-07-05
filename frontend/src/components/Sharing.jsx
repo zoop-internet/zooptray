@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Wifi, Copy, Check, Zap, Shield } from 'lucide-react';
+import { Wifi, Copy, Check, Zap, Shield, Key, Loader } from 'lucide-react';
 import { toast } from './Toast';
+import { CreateConnectionProfile } from '../../wailsjs/go/main/NodeService';
 
 export default function Sharing({ 
   telemetry, 
@@ -11,22 +12,35 @@ export default function Sharing({
   const isOnline = telemetry.tunnelActive;
   const publicIP = telemetry.publicIP || 'Not detected';
   const [copied, setCopied] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   const handleCopyIP = () => {
     if (!telemetry.publicIP) return;
     navigator.clipboard.writeText(telemetry.publicIP);
     setCopied(true);
-    toast.success('IP address copied to clipboard');
+    toast.success('IP address copied');
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleToggle = () => {
-    const next = !isOnline;
-    onToggleSharing(next);
-    if (next) {
-      toast.success('Sharing enabled — hotspot is now visible');
-    } else {
-      toast.warning('Sharing paused — hotspot is offline');
+    onToggleSharing(!isOnline);
+    toast(isOnline ? 'Sharing paused' : 'Sharing enabled', isOnline ? 'warning' : 'success');
+  };
+
+  const handleGenerateProfile = async () => {
+    if (!config?.node?.id) {
+      toast.error('Node ID not available');
+      return;
+    }
+    setProfileLoading(true);
+    try {
+      const profile = await CreateConnectionProfile(config.node.id);
+      navigator.clipboard.writeText(JSON.stringify(profile, null, 2));
+      toast.success('Config generated and copied to clipboard');
+    } catch (err) {
+      toast.error(err?.message || 'Failed to generate config');
+    } finally {
+      setProfileLoading(false);
     }
   };
 
@@ -62,6 +76,15 @@ export default function Sharing({
             onClick={handleToggle}
           >
             {isOnline ? 'Pause Sharing' : 'Start Sharing'}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={handleGenerateProfile}
+            disabled={profileLoading}
+          >
+            {profileLoading ? <Loader size={14} className="wg-spin" /> : <Key size={14} />}
+            Client Config
           </button>
         </div>
       </div>

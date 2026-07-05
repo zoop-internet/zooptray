@@ -56,7 +56,7 @@ export default function Settings({ config, interfaces, onSaveConfig }) {
 
     const updatedConfig = {
       node: {
-        id: displayName.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+        id: displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || config.node.id,
         displayName,
         privateKeyPath: config.node.privateKeyPath,
         isPublic,

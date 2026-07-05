@@ -1,19 +1,17 @@
-Zoop One End-User License Agreement (EULA)
+Zoop Network End User License Agreement
 
-PLEASE READ THIS AGREEMENT BEFORE INSTALLING OR USING THIS SOFTWARE.
+By installing or using Zoop One ("Software"), you enter into a binding agreement with Zoop Network on the following terms.
 
-By installing or using Zoop One, you agree to the terms and conditions described herein.
+1. GRANT OF LICENSE. Zoop Network grants you a non-exclusive, non-transferable, revocable license to install and use the Software for personal, non-commercial purposes in accordance with this agreement.
 
-1. License
-You are granted a non-exclusive license to use this software.
+2. NETWORK PARTICIPATION. The Software connects to a decentralized peer-to-peer network. You acknowledge that network participation may involve sharing bandwidth and computational resources with other network participants.
 
-2. Warranty
-This software is provided "AS IS" without warranty of any kind.
+3. PRIVACY. The Software collects minimal telemetry (connection status, uptime, bandwidth usage) required for network operations. No personal data, browsing history, or payload content is collected, stored, or transmitted to Zoop Network servers.
 
-3. Liability
-In no event shall the authors be liable for any damages arising from use of this software.
+4. LIMITATION OF LIABILITY. The Software is provided "as is" without warranty of any kind. Zoop Network shall not be liable for any damages arising from the use or inability to use the Software.
 
-4. Acceptance
-Installation of this software indicates acceptance of this EULA.
+5. OPEN SOURCE. The Software is distributed as open source under the terms of the applicable license. You may inspect, modify, and distribute the source code in accordance with that license.
 
-For full terms visit: https://github.com/Zoop-Network/zooptray
+6. TERMINATION. This agreement terminates automatically if you violate any of its terms. Upon termination, you must uninstall the Software and destroy all copies in your possession.
+
+By installing and using this Software, you acknowledge that you have read, understood, and agree to be bound by these terms.

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Zoop One
+Comment=Decentralized network sharing node
+Icon=zoop-one
+Exec=zoop-one
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true
+StartupWMClass=zoop-one
